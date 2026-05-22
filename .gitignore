@@ -1,0 +1,59 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local database and generated data
+data/*.db
+data/*.db-*
+*.sqlite
+*.sqlite3
+
+# Logs and runtime files
+logs/
+*.log
+*.pid
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# Editor and OS files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+frontend/.vscode/*
+!frontend/.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary files
+tmp/
+temp/
+*.tmp
