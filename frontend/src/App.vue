@@ -11,7 +11,7 @@
           :disabled="triggering"
           @click="triggerBriefing"
         >
-          {{ triggering ? '⏳ 生成中...' : '🚀 手动生成今日早报' }}
+          {{ triggering ? '⏳ 抓取中...' : '🔄 抓取最新资讯' }}
         </button>
       </div>
     </nav>
@@ -59,12 +59,12 @@ function showToast(message, type = 'success') {
 async function triggerBriefing() {
   triggering.value = true
   try {
-    const resp = await fetch(`${API_BASE}/trigger`, { method: 'POST' })
+    const resp = await fetch(`${API_BASE}/trigger?loop=A`, { method: 'POST' })
     if (!resp.ok) throw new Error(await resp.text())
     const data = await resp.json()
     showToast(data.message, 'success')
   } catch (err) {
-    showToast(`生成失败: ${err.message}`, 'error')
+    showToast(`抓取请求失败: ${err.message}`, 'error')
   } finally {
     triggering.value = false
   }

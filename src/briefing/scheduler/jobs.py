@@ -1,86 +1,151 @@
-"""早报生成完整流程编排。
-
-从数据采集到 AI 处理，完整的管道执行逻辑。
-"""
+"""早报生成与双轨推送流程编排。"""
 
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from briefing.ai.deduplicator import deduplicate
 from briefing.ai.enricher import enrich_background
 from briefing.ai.filter import filter_ai_related
 from briefing.ai.mindmap import generate_mindmap
+from briefing.ai.scorer import score_single_news
 from briefing.ai.summarizer import summarize_single
-from briefing.collectors.github import GitHubTrendingCollector
-from briefing.collectors.hackernews import HackerNewsCollector
-from briefing.collectors.huggingface import HuggingFaceCollector
+from briefing.collectors.rss import fetch_all_feeds
 from briefing.config import get_settings
-from briefing.database import get_session, init_db
+from briefing.database import get_session
 from briefing.models import (
     BriefingItem,
     BriefingStatus,
     DailyBriefing,
     RawNewsItem,
-    SourcePlatform,
 )
 from briefing.push.dingtalk import send_mindmap_to_dingtalk
 
 logger = logging.getLogger(__name__)
 
 
-RUNNING_STATUSES = (BriefingStatus.COLLECTING, BriefingStatus.PROCESSING)
-
-
 def _bounded_workers(requested: int, total: int) -> int:
-    """根据任务总数限制线程数，至少返回 1。"""
-    return max(1, min(requested, total))
+    """根据任务总数限制线程数。"""
+    return min(max(1, requested), total or 1)
 
 
-def _collect_all(max_items: int, concurrency: int) -> list:
-    """从所有平台并行采集数据。"""
-    collectors = [
-        GitHubTrendingCollector(max_items=max_items),
-        HackerNewsCollector(max_items=max_items),
-        HuggingFaceCollector(max_items=max_items),
-    ]
+def fetch_and_instant_push():
+    """Loop A: 高频抓取与即时推送。"""
+    logger.info("开始执行 Loop A: 高频 RSS 抓取与即时推送...")
+    settings = get_settings()
+    session = get_session()
 
-    def run_collector(collector):
-        try:
-            items = collector.collect()
-            logger.info(
-                "%s 采集了 %d 条",
-                collector.__class__.__name__,
-                len(items),
-            )
-            return items
-        except Exception as e:
-            logger.error("%s 采集失败: %s", collector.__class__.__name__, e)
-            return []
+    try:
+        # 1. 并发抓取所有 RSS 源
+        raw_items = fetch_all_feeds()
+        if not raw_items:
+            logger.info("Loop A 完成：无新数据")
+            return
 
-    results_by_index: list[list] = [[] for _ in collectors]
-    max_workers = _bounded_workers(concurrency, len(collectors))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_index = {
-            executor.submit(run_collector, collector): i
-            for i, collector in enumerate(collectors)
+        # 2. 基于 URL 简单去重 (过滤掉数据库已有的)
+        existing_urls = {
+            url[0] for url in session.query(RawNewsItem.url).filter(
+                RawNewsItem.collected_at >= datetime.now(timezone.utc) - timedelta(days=2)
+            ).all()
         }
-        for future in as_completed(future_to_index):
-            results_by_index[future_to_index[future]] = future.result()
+        
+        new_items = []
+        for item in raw_items:
+            if item.url not in existing_urls:
+                new_items.append(item)
+                existing_urls.add(item.url)
+                
+        if not new_items:
+            logger.info("Loop A 完成：抓取的数据已在数据库中存在")
+            return
 
-    all_items = []
-    for items in results_by_index:
-        all_items.extend(items)
+        # 3. 并发打分
+        logger.info("开始为 %d 条新数据进行 AI 打分", len(new_items))
+        scored_items = []
+        with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(new_items))) as executor:
+            future_to_item = {executor.submit(score_single_news, item): item for item in new_items}
+            for future in as_completed(future_to_item):
+                try:
+                    scored_items.append(future.result())
+                except Exception as e:
+                    logger.error("打分异常: %s", e)
 
-    return all_items
+        # 4. 筛选入库与即时推送
+        to_insert = []
+        for item in scored_items:
+            if item.score >= settings.fetch_store_threshold:
+                db_item = RawNewsItem(
+                    source=item.source,
+                    title=item.title,
+                    url=item.url,
+                    description=item.description,
+                    raw_content=item.raw_content,
+                    score=item.score,
+                    extra_data=json.dumps(item.extra_data, ensure_ascii=False),
+                    published_at=item.published_at,
+                    briefing_date=datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d"),
+                )
+                
+                # 即时推送判断
+                if item.score >= settings.instant_push_threshold:
+                    _send_instant_push(item)
+                    db_item.is_pushed_instantly = True
+                    
+                to_insert.append(db_item)
+
+        if to_insert:
+            session.add_all(to_insert)
+            session.commit()
+            logger.info("Loop A 完成：新增入库 %d 条，最高分: %d", 
+                        len(to_insert), max(i.score for i in to_insert))
+        else:
+            logger.info("Loop A 完成：无满足分数门槛的数据入库")
+
+    except Exception as e:
+        session.rollback()
+        logger.error("Loop A 异常: %s", e)
+    finally:
+        session.close()
 
 
-def _process_news_item(index: int, total: int, item) -> dict:
-    """为单条新闻生成摘要和背景；供线程池并发调用。"""
-    logger.info("处理 [%d/%d] %s", index + 1, total, item.title[:40])
+def _send_instant_push(item):
+    """发送即时快讯到钉钉。"""
+    settings = get_settings()
+    if not settings.dingtalk_webhook_url:
+        return
 
+    import requests
+    from briefing.push.dingtalk import _build_signed_webhook_url
+    
+    url = _build_signed_webhook_url(settings.dingtalk_webhook_url, settings.dingtalk_secret)
+    score_reason = item.extra_data.get("score_reason", "")
+    
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": f"⚡ AI 突发快讯：{item.title}",
+            "text": (
+                f"### ⚡ AI 重磅快讯 ({item.score}分)\n\n"
+                f"**[{item.title}]({item.url})**\n\n"
+                f"> {item.description[:300]}...\n\n"
+                f"**上榜理由**：{score_reason}\n\n"
+                f"*{item.source}*"
+            )
+        }
+    }
+    
+    try:
+        requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+        logger.info("已发送即时快讯: %s", item.title)
+    except Exception as e:
+        logger.error("即时快讯发送失败: %s", e)
+
+
+def _process_digest_item(item, trigger_ddgs: bool) -> dict:
+    """为单条晨报新闻生成摘要和补充背景。"""
+    # 摘要
     summary = summarize_single(
         title=item.title,
         source=item.source,
@@ -88,244 +153,204 @@ def _process_news_item(index: int, total: int, item) -> dict:
         description=item.description,
         content=item.raw_content,
     )
-
-    logger.info("背景补充 [%d/%d] %s", index + 1, total, item.title[:40])
-    background = enrich_background(
-        title=item.title,
-        summary=summary["one_line_summary"],
-        key_points=summary["key_points"],
-    )
+    
+    # 背景补充
+    background = ""
+    if trigger_ddgs:
+        key_points = summary.get("key_points", [])
+        background = enrich_background(item.title, summary.get("one_line_summary", ""), key_points)
 
     return {
-        **summary,
-        "title": item.title,
-        "url": item.url,
-        "source": item.source,
+        "raw_item": item,
+        "summary": summary,
         "background": background,
-        "score": item.score,
-        "_input_index": index,
     }
 
 
-def _process_news_items_parallel(items: list, concurrency: int) -> list[dict]:
-    """并行执行每条新闻的摘要和背景补充。"""
-    if not items:
-        return []
+def generate_daily_briefing(date_str: str | None = None) -> int | None:
+    """Loop B: 每日晨报聚合推送。"""
+    settings = get_settings()
+    local_tz = ZoneInfo(settings.timezone)
+    if not date_str:
+        date_str = datetime.now(local_tz).strftime("%Y-%m-%d")
 
-    total = len(items)
-    max_workers = _bounded_workers(concurrency, total)
-    logger.info("并行处理 %d 条新闻，LLM 并发数=%d", total, max_workers)
+    logger.info("开始生成 %s 的每日早报...", date_str)
+    session = get_session()
 
-    processed_items: list[dict | None] = [None] * total
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_index = {
-            executor.submit(_process_news_item, i, total, item): i
-            for i, item in enumerate(items)
-        }
-        for future in as_completed(future_to_index):
-            index = future_to_index[future]
-            processed_items[index] = future.result()
+    try:
+        # 1. 检查是否已生成
+        existing = session.query(DailyBriefing).filter(DailyBriefing.date == date_str).first()
+        if existing and existing.status in (BriefingStatus.COMPLETED, BriefingStatus.PROCESSING):
+            logger.info("早报 %s 已存在或正在处理", date_str)
+            return existing.id
 
-    return [item for item in processed_items if item is not None]
+        if not existing:
+            existing = DailyBriefing(date=date_str, status=BriefingStatus.PROCESSING)
+            session.add(existing)
+            session.flush()
+        else:
+            existing.status = BriefingStatus.PROCESSING
+            # 清理旧子项
+            session.query(BriefingItem).filter(BriefingItem.briefing_id == existing.id).delete()
+            session.flush()
+
+        # 2. 读取过去 48 小时内高分数据 (score >= 60)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        db_items = session.query(RawNewsItem).filter(
+            RawNewsItem.collected_at >= cutoff,
+            RawNewsItem.score >= settings.fetch_store_threshold
+        ).all()
+        
+        if not db_items:
+            logger.warning("没有足够的新闻来生成 %s 的早报", date_str)
+            existing.status = BriefingStatus.FAILED
+            existing.summary_overview = "今日暂无足够高价值的 AI 资讯更新。"
+            session.commit()
+            return existing.id
+
+        # 转换为 Schema 进行语义去重
+        from briefing.collectors.base import RawNewsItemSchema
+        schema_items = [
+            RawNewsItemSchema(
+                source=i.source,
+                title=i.title,
+                url=i.url,
+                description=i.description,
+                raw_content=i.raw_content,
+                score=i.score,
+                published_at=i.published_at,
+            ) for i in db_items
+        ]
+        
+        # 3. 语义去重
+        deduped_items = deduplicate(schema_items)
+
+        # 4. AI 相关新闻过滤
+        if settings.ai_filter_enabled:
+            deduped_items = filter_ai_related(
+                deduped_items,
+                audience=settings.ai_filter_target_audience,
+                batch_size=settings.ai_filter_batch_size,
+            )
+
+        # 按分数排序取 top N
+        deduped_items.sort(key=lambda x: x.score, reverse=True)
+        top_items = deduped_items[:settings.collect_max_items]
+
+        # 4. 并发摘要和背景补充
+        processed_results = []
+        with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(top_items))) as executor:
+            futures = []
+            for item in top_items:
+                trigger_ddgs = (item.score >= settings.ddgs_trigger_threshold)
+                futures.append(executor.submit(_process_digest_item, item, trigger_ddgs))
+                
+            for future in as_completed(futures):
+                try:
+                    processed_results.append(future.result())
+                except Exception as e:
+                    logger.error("处理单条新闻异常: %s", e)
+
+        # 5. 生成思维导图
+        mindmap_data = [
+            {"title": r["raw_item"].title, "category": r["summary"].get("category", "其他"), "one_line_summary": r["summary"].get("one_line_summary", "")}
+            for r in processed_results
+        ]
+        mindmap_code = generate_mindmap(mindmap_data)
+
+        # 6. 保存入库
+        existing.mindmap_mermaid = mindmap_code
+        existing.summary_overview = f"为您精选了过去 48 小时内最具价值的 {len(processed_results)} 条 AI 领域资讯。"
+        existing.status = BriefingStatus.COMPLETED
+
+        briefing_items = []
+        for i, res in enumerate(processed_results):
+            raw = res["raw_item"]
+            summary = res["summary"]
+            b_item = BriefingItem(
+                briefing_id=existing.id,
+                source=raw.source,
+                title=raw.title,
+                url=raw.url,
+                one_line_summary=summary.get("one_line_summary", ""),
+                key_points=json.dumps(summary.get("key_points", []), ensure_ascii=False),
+                importance=summary.get("importance", ""),
+                background=res["background"],
+                category=summary.get("category", "其他"),
+                priority=i,
+            )
+            briefing_items.append(b_item)
+            
+        session.add_all(briefing_items)
+        session.commit()
+        logger.info("早报 %s 生成成功并已入库", date_str)
+
+        # 7. 推送钉钉
+        if settings.dingtalk_webhook_url:
+            news_fallback = [
+                {"title": r["raw_item"].title, "one_line_summary": r["summary"].get("one_line_summary", "")}
+                for r in processed_results
+            ]
+            try:
+                send_mindmap_to_dingtalk(
+                    webhook_url=settings.dingtalk_webhook_url,
+                    date=date_str,
+                    mindmap_code=mindmap_code,
+                    frontend_base_url=settings.frontend_base_url,
+                    news_items=news_fallback,
+                    summary_max_items=settings.dingtalk_summary_max_items,
+                    secret=settings.dingtalk_secret,
+                )
+                logger.info("早报 %s 推送钉钉成功", date_str)
+            except Exception as e:
+                logger.error("早报推送钉钉失败: %s", e)
+
+        return existing.id
+
+    except Exception as e:
+        session.rollback()
+        logger.error("生成早报异常: %s", e)
+        existing = session.query(DailyBriefing).filter(DailyBriefing.date == date_str).first()
+        if existing:
+            existing.status = BriefingStatus.FAILED
+            session.commit()
+        return None
+    finally:
+        session.close()
 
 
 def mark_interrupted_briefings_failed() -> int:
     """将上次进程中断遗留的运行中早报标记为失败。"""
     session = get_session()
     try:
-        interrupted = (
-            session.query(DailyBriefing)
-            .filter(DailyBriefing.status.in_(RUNNING_STATUSES))
-            .all()
-        )
-        for briefing in interrupted:
-            logger.warning(
-                "发现上次中断遗留的早报任务，标记为失败: %s (%s)",
-                briefing.date,
-                briefing.status.value,
-            )
-            briefing.status = BriefingStatus.FAILED
-            if not briefing.summary_overview:
-                briefing.summary_overview = "上次生成过程中服务中断，任务未完成，可重新生成。"
-
-        if interrupted:
-            session.commit()
-        return len(interrupted)
-    except Exception:
+        interrupted = session.query(DailyBriefing).filter(
+            DailyBriefing.status.in_([BriefingStatus.PROCESSING, BriefingStatus.COLLECTING])
+        ).all()
+        count = len(interrupted)
+        for b in interrupted:
+            b.status = BriefingStatus.FAILED
+        session.commit()
+        return count
+    except Exception as e:
         session.rollback()
-        raise
+        logger.error("恢复中断状态异常: %s", e)
+        return 0
     finally:
         session.close()
 
 
-def _push_mindmap_to_dingtalk(
-    settings,
-    date_str: str,
-    mindmap_code: str,
-    news_items: list[dict] | None = None,
-) -> None:
-    """配置了钉钉 webhook 时推送思维导图。"""
-    if not settings.dingtalk_webhook_url:
-        return
-    if not mindmap_code.strip():
-        logger.info("思维导图为空，跳过钉钉推送")
-        return
-
-    try:
-        send_mindmap_to_dingtalk(
-            webhook_url=settings.dingtalk_webhook_url,
-            secret=settings.dingtalk_secret,
-            timeout=settings.dingtalk_timeout,
-            date=date_str,
-            mindmap_code=mindmap_code,
-            frontend_base_url=settings.frontend_base_url,
-            news_items=news_items,
-            summary_max_items=settings.dingtalk_summary_max_items,
-        )
-        logger.info("钉钉思维导图推送完成: %s", date_str)
-    except Exception as e:
-        logger.error("钉钉思维导图推送失败: %s", e)
-
-
-def generate_daily_briefing(date_str: str | None = None) -> int | None:
-    """执行完整的早报生成流程。
-
-    Args:
-        date_str: 日报日期 (YYYY-MM-DD)，默认今天
-
-    Returns:
-        生成的 DailyBriefing ID，失败返回 None
-    """
-    settings = get_settings()
-    local_tz = ZoneInfo(settings.timezone)
-
-    if not date_str:
-        date_str = datetime.now(local_tz).strftime("%Y-%m-%d")
-
-    init_db()
-
-    logger.info("====== 开始生成 %s 的早报 ======", date_str)
-
-    # 1. 检查是否已生成
-    briefing = None
+def cleanup_memory():
+    """Loop C: 数据库清理。"""
+    logger.info("开始清理过期数据...")
     session = get_session()
     try:
-        existing = (
-            session.query(DailyBriefing)
-            .filter(DailyBriefing.date == date_str)
-            .first()
-        )
-        if existing and existing.status == BriefingStatus.COMPLETED:
-            logger.info("日期 %s 的早报已存在且已完成，跳过", date_str)
-            return existing.id
-
-        # 创建或复用早报记录
-        if existing:
-            briefing = existing
-            briefing.status = BriefingStatus.COLLECTING
-        else:
-            briefing = DailyBriefing(date=date_str, status=BriefingStatus.COLLECTING)
-            session.add(briefing)
+        # 删除 7 天前的 RawNewsItem
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        deleted = session.query(RawNewsItem).filter(RawNewsItem.collected_at < cutoff).delete()
         session.commit()
-        briefing_id = briefing.id
-
-        # 2. 数据采集
-        logger.info("[Step 1/5] 数据采集...")
-        raw_items = _collect_all(
-            max_items=settings.collect_max_items,
-            concurrency=settings.collector_concurrency,
-        )
-        logger.info("总计采集 %d 条原始新闻", len(raw_items))
-
-        # 保存原始数据
-        for item in raw_items:
-            raw_record = RawNewsItem(
-                source=SourcePlatform(item.source),
-                title=item.title,
-                url=item.url,
-                description=item.description,
-                raw_content=item.raw_content[:10000],
-                score=item.score,
-                extra_data=json.dumps(item.extra_data, ensure_ascii=False),
-                briefing_date=date_str,
-            )
-            session.add(raw_record)
-        session.commit()
-
-        # 3. 语义去重
-        briefing.status = BriefingStatus.PROCESSING
-        session.commit()
-
-        logger.info("[Step 2/5] 语义去重...")
-        deduped_items = deduplicate(raw_items)
-        logger.info("去重后剩余 %d 条", len(deduped_items))
-
-        if settings.ai_filter_enabled:
-            logger.info("[Step 3/6] AI 相关新闻过滤...")
-            filtered_items = filter_ai_related(
-                deduped_items,
-                audience=settings.ai_filter_target_audience,
-                batch_size=settings.ai_filter_batch_size,
-            )
-            logger.info("AI 过滤后剩余 %d 条", len(filtered_items))
-        else:
-            filtered_items = deduped_items
-
-        # 4. 结构化摘要 + 背景补充
-        logger.info("[Step 4/6] 结构化摘要 + 背景补充...")
-        processed_items = _process_news_items_parallel(
-            filtered_items,
-            concurrency=settings.llm_concurrency,
-        )
-
-        # 按 score 排序，赋优先级
-        processed_items.sort(
-            key=lambda x: (-x.get("score", 0), x.get("_input_index", 0))
-        )
-        for i, item in enumerate(processed_items):
-            item["priority"] = i
-
-        # 5. 生成思维导图
-        logger.info("[Step 5/6] 生成思维导图...")
-        mindmap_code = generate_mindmap(processed_items)
-
-        # 6. 持久化处理结果
-        briefing.mindmap_mermaid = mindmap_code
-        briefing.summary_overview = (
-            f"今日共收录 {len(processed_items)} 条技术新闻"
-        )
-        briefing.status = BriefingStatus.COMPLETED
-
-        for item in processed_items:
-            briefing_item = BriefingItem(
-                briefing_id=briefing_id,
-                source=SourcePlatform(item["source"]),
-                title=item["title"],
-                url=item["url"],
-                one_line_summary=item["one_line_summary"],
-                key_points=json.dumps(item["key_points"], ensure_ascii=False),
-                importance=item["importance"],
-                background=item["background"],
-                category=item["category"],
-                priority=item["priority"],
-            )
-            session.add(briefing_item)
-
-        session.commit()
-        _push_mindmap_to_dingtalk(settings, date_str, mindmap_code, processed_items)
-        logger.info("====== %s 的早报生成完成，共 %d 条 ======", date_str, len(processed_items))
-        return briefing_id
-
+        logger.info("已清理 %d 条过期原始新闻数据", deleted)
     except Exception as e:
-        logger.error("早报生成失败: %s", e)
         session.rollback()
-        if briefing is not None:
-            try:
-                briefing.status = BriefingStatus.FAILED
-                session.commit()
-            except Exception:
-                logger.error("标记早报失败状态时出错，已忽略")
-                session.rollback()
-        raise
+        logger.error("数据清理异常: %s", e)
     finally:
         session.close()

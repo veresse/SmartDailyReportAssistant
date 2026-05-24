@@ -30,17 +30,21 @@
             {
               'calendar-cell--empty': !cell.date,
               'calendar-cell--today': cell.isToday,
+              'calendar-cell--has-data': cell.hasData,
               'calendar-cell--has-briefing': cell.status === 'completed',
               'calendar-cell--processing': cell.status === 'processing' || cell.status === 'collecting',
               'calendar-cell--failed': cell.status === 'failed',
             },
           ]"
-          @click="cell.status === 'completed' && goToBriefing(cell.dateStr)"
+          @click="cell.hasData && goToBriefing(cell.dateStr)"
         >
           <span v-if="cell.date" class="calendar-day">{{ cell.date }}</span>
-          <span v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done">✓</span>
-          <span v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing">⟳</span>
-          <span v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed">✗</span>
+          <div v-if="cell.hasData" class="calendar-indicators">
+            <span v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done" title="早报已生成">✓</span>
+            <span v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing" title="早报生成中">⟳</span>
+            <span v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed" title="早报生成失败">✗</span>
+            <span class="feed-count-badge" v-if="cell.feedCount > 0" title="今日资讯数量">{{ cell.feedCount }}</span>
+          </div>
         </div>
       </div>
     </section>
@@ -87,7 +91,7 @@ import { fetchDates, fetchBriefings } from '../api.js'
 const router = useRouter()
 const currentYear = ref(new Date().getFullYear())
 const currentMonth = ref(new Date().getMonth()) // 0-indexed
-const briefingDates = ref({}) // { "2025-05-19": "completed", ... }
+const briefingDates = ref({}) // { "2025-05-19": { status: "completed", feedCount: 42 }, ... }
 const recentBriefings = ref([])
 const loading = ref(true)
 
@@ -119,11 +123,14 @@ const calendarCells = computed(() => {
       today.getMonth() === month &&
       today.getDate() === d
 
+    const dateInfo = briefingDates.value[dateStr] || {}
     cells.push({
       date: d,
       dateStr,
       isToday,
-      status: briefingDates.value[dateStr] || null,
+      hasData: !!dateInfo.status || !!dateInfo.feedCount,
+      status: dateInfo.status || null,
+      feedCount: dateInfo.feedCount || 0,
     })
   }
 
@@ -181,7 +188,10 @@ onMounted(async () => {
 
     // 构建日期 -> 状态映射
     for (const d of dates) {
-      briefingDates.value[d.date] = d.status
+      briefingDates.value[d.date] = {
+        status: d.status,
+        feedCount: d.feed_count || 0
+      }
     }
 
     recentBriefings.value = briefings
@@ -271,16 +281,18 @@ onMounted(async () => {
   background: rgba(99, 102, 241, 0.08);
 }
 
-.calendar-cell--has-briefing {
+.calendar-cell--has-data {
   cursor: pointer;
-  background: var(--gradient-card);
-  border-color: rgba(99, 102, 241, 0.2);
+  background: var(--color-bg-card);
 }
 
-.calendar-cell--has-briefing:hover {
+.calendar-cell--has-data:hover {
   border-color: var(--color-accent-indigo);
-  box-shadow: var(--shadow-glow);
   transform: scale(1.05);
+}
+
+.calendar-cell--has-briefing {
+  background: var(--gradient-card);
 }
 
 .calendar-cell--processing {
@@ -300,6 +312,20 @@ onMounted(async () => {
 .calendar-dot {
   font-size: 0.65rem;
   line-height: 1;
+}
+
+.calendar-indicators {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.feed-count-badge {
+  font-size: 0.6rem;
+  background: rgba(255,255,255,0.1);
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
 }
 
 .calendar-dot--done {

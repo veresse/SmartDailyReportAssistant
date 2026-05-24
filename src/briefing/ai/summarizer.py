@@ -3,7 +3,6 @@
 将每条新闻转化为「一句话结论 + 3个核心要点 + 为什么重要」的标准结构。
 """
 
-import json
 import logging
 
 from briefing.ai.client import chat_completion_json
@@ -76,26 +75,3 @@ def summarize_single(
             "category": "其他",
         }
 
-
-def summarize_batch(items: list[dict]) -> list[dict]:
-    """批量生成结构化摘要。
-
-    Args:
-        items: 每个元素需包含 title, source, url, description, raw_content 字段
-
-    Returns:
-        与输入等长的摘要列表
-    """
-    results = []
-    for item in items:
-        summary = summarize_single(
-            title=item.get("title", ""),
-            source=item.get("source", ""),
-            url=item.get("url", ""),
-            description=item.get("description", ""),
-            content=item.get("raw_content", ""),
-        )
-        results.append(summary)
-        logger.info("已摘要: %s", item.get("title", "")[:40])
-
-    return results

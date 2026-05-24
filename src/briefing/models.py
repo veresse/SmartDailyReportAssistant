@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum as SAEnum,
@@ -17,14 +18,6 @@ import enum
 
 class Base(DeclarativeBase):
     """ORM 基类。"""
-
-
-class SourcePlatform(str, enum.Enum):
-    """数据来源平台。"""
-
-    GITHUB = "github"
-    HACKERNEWS = "hackernews"
-    HUGGINGFACE = "huggingface"
 
 
 class BriefingStatus(str, enum.Enum):
@@ -42,13 +35,15 @@ class RawNewsItem(Base):
     __tablename__ = "raw_news_items"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    source = Column(SAEnum(SourcePlatform), nullable=False, index=True)
+    source = Column(String(100), nullable=False, index=True)
     title = Column(String(500), nullable=False)
     url = Column(String(1000), nullable=False)
     description = Column(Text, default="")
     raw_content = Column(Text, default="")
     score = Column(Integer, default=0)
     extra_data = Column(Text, default="{}")  # JSON 格式存储附加字段
+    published_at = Column(String(50), default="")
+    is_pushed_instantly = Column(Boolean, default=False)
     collected_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -87,7 +82,7 @@ class BriefingItem(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     briefing_id = Column(Integer, ForeignKey("daily_briefings.id"), nullable=False, index=True)
-    source = Column(SAEnum(SourcePlatform), nullable=False)
+    source = Column(String(100), nullable=False)
     title = Column(String(500), nullable=False)
     url = Column(String(1000), nullable=False)
     one_line_summary = Column(Text, default="")  # 一句话结论

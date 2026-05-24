@@ -23,6 +23,17 @@ export async function fetchBriefings(limit = 30) {
 }
 
 /**
+ * 获取指定日期的实时采集资讯流。
+ * @param {string} date - YYYY-MM-DD
+ * @returns {Promise<Array>}
+ */
+export async function fetchFeed(date) {
+  const resp = await fetch(`${API_BASE}/feed/${date}`)
+  if (!resp.ok) throw new Error('获取实时资讯流失败')
+  return resp.json()
+}
+
+/**
  * 获取指定日期的早报详情。
  * @param {string} date - YYYY-MM-DD
  * @returns {Promise<Object>}

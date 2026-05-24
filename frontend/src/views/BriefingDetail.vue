@@ -14,12 +14,6 @@
       </div>
     </div>
 
-    <!-- Not Found -->
-    <div v-else-if="!briefing" class="empty-state">
-      <h2>📭 未找到 {{ date }} 的早报</h2>
-      <p class="text-muted">该日期暂无早报数据。</p>
-    </div>
-
     <!-- Content -->
     <template v-else>
       <!-- Header -->
@@ -27,11 +21,14 @@
         <div class="detail-header-main">
           <div>
             <h1 class="detail-title">
-              📰 {{ date }} 早报
+              📰 {{ date }} 资讯
             </h1>
-            <p class="detail-overview">{{ briefing.summary_overview }}</p>
+            <p class="detail-overview" v-if="briefing?.summary_overview">
+              {{ briefing.summary_overview }}
+            </p>
           </div>
           <button
+            v-if="briefing"
             class="btn btn-danger btn-sm"
             :disabled="deleting"
             @click="handleDeleteBriefing"
@@ -41,75 +38,112 @@
         </div>
       </header>
 
-      <!-- Mindmap -->
-      <section v-if="briefing.mindmap_mermaid" class="mindmap-section card">
-        <h2 class="section-title">🧠 技术演进思维导图</h2>
-        <div ref="mermaidContainer" class="mermaid-container"></div>
-      </section>
+      <!-- 🧠 晨报精选区域 -->
+      <template v-if="briefing && briefing.status === 'completed'">
+        <!-- Mindmap -->
+        <section v-if="briefing.mindmap_mermaid" class="mindmap-section card">
+          <h2 class="section-title">🧠 技术演进思维导图</h2>
+          <div ref="mermaidContainer" class="mermaid-container"></div>
+        </section>
 
-      <!-- News Items -->
-      <section class="news-section">
-        <h2 class="section-title">📋 核心新闻 ({{ briefing.items.length }})</h2>
+        <!-- News Items -->
+        <section class="news-section" v-if="briefing.items?.length">
+          <h2 class="section-title">📋 核心新闻摘要 ({{ briefing.items.length }})</h2>
 
-        <div class="news-list">
-          <article
-            v-for="item in briefing.items"
-            :key="item.id"
-            :id="newsAnchorId(item)"
-            :class="[
-              'news-card',
-              'card',
-              { 'news-card--highlighted': highlightedNewsId === item.id },
-            ]"
-          >
-            <div class="news-card-header">
-              <div class="news-card-tags">
-                <span :class="['tag', sourceTagClass(item.source)]">
-                  {{ sourceLabel(item.source) }}
-                </span>
-                <span v-if="item.category" class="tag tag-category">
-                  {{ item.category }}
-                </span>
+          <div class="news-list">
+            <article
+              v-for="item in briefing.items"
+              :key="item.id"
+              :id="newsAnchorId(item)"
+              :class="[
+                'news-card',
+                'card',
+                { 'news-card--highlighted': highlightedNewsId === item.id },
+              ]"
+            >
+              <div class="news-card-header">
+                <div class="news-card-tags">
+                  <span :class="['tag', sourceTagClass(item.source)]">
+                    {{ sourceLabel(item.source) }}
+                  </span>
+                  <span v-if="item.category" class="tag tag-category">
+                    {{ item.category }}
+                  </span>
+                </div>
+                <a :href="item.url" target="_blank" rel="noopener" class="news-link">
+                  原文 ↗
+                </a>
               </div>
-              <a :href="item.url" target="_blank" rel="noopener" class="news-link">
-                原文 ↗
-              </a>
+
+              <h3 class="news-title">{{ item.title }}</h3>
+              <p class="news-summary">{{ item.one_line_summary }}</p>
+
+              <!-- Key Points -->
+              <ul v-if="item.key_points.length" class="key-points">
+                <li v-for="(point, i) in item.key_points" :key="i">
+                  {{ point }}
+                </li>
+              </ul>
+
+              <!-- Importance -->
+              <p v-if="item.importance" class="importance">
+                <strong>💡 为什么重要：</strong>{{ item.importance }}
+              </p>
+
+              <!-- Background Toggle -->
+              <div v-if="item.background">
+                <button
+                  class="btn btn-ghost btn-sm toggle-bg-btn"
+                  @click="toggleBackground(item.id)"
+                >
+                  {{ expandedBgs.has(item.id) ? '收起背景知识 ▲' : '展开背景知识 ▼' }}
+                </button>
+                <transition name="slide-up">
+                  <div
+                    v-if="expandedBgs.has(item.id)"
+                    class="background-content"
+                    v-html="renderMarkdown(item.background)"
+                  ></div>
+                </transition>
+              </div>
+            </article>
+          </div>
+        </section>
+      </template>
+
+      <!-- ⚡ 实时资讯流区域 -->
+      <section class="feed-section">
+        <h2 class="section-title">⚡ 实时资讯流 ({{ feedItems.length }})</h2>
+        <div v-if="feedItems.length === 0" class="empty-state">
+          <p class="text-muted">今日暂无采集数据。</p>
+        </div>
+        <div v-else class="feed-list">
+          <a
+            v-for="item in feedItems"
+            :key="item.id"
+            :href="item.url"
+            target="_blank"
+            rel="noopener"
+            class="feed-card card"
+          >
+            <div class="feed-score-wrapper">
+              <span class="feed-score" :class="scoreClass(item.score)">{{ item.score }}</span>
             </div>
-
-            <h3 class="news-title">{{ item.title }}</h3>
-            <p class="news-summary">{{ item.one_line_summary }}</p>
-
-            <!-- Key Points -->
-            <ul v-if="item.key_points.length" class="key-points">
-              <li v-for="(point, i) in item.key_points" :key="i">
-                {{ point }}
-              </li>
-            </ul>
-
-            <!-- Importance -->
-            <p v-if="item.importance" class="importance">
-              <strong>💡 为什么重要：</strong>{{ item.importance }}
-            </p>
-
-            <!-- Background Toggle -->
-            <div v-if="item.background">
-              <button
-                class="btn btn-ghost btn-sm toggle-bg-btn"
-                @click="toggleBackground(item.id)"
-              >
-                {{ expandedBgs.has(item.id) ? '收起背景知识 ▲' : '展开背景知识 ▼' }}
-              </button>
-              <transition name="slide-up">
-                <div
-                  v-if="expandedBgs.has(item.id)"
-                  class="background-content"
-                  v-html="renderMarkdown(item.background)"
-                ></div>
-              </transition>
+            <div class="feed-content">
+              <h3 class="feed-title">
+                <span v-if="item.is_pushed_instantly" class="instant-badge" title="触发了即时推送">⚡</span>
+                {{ item.title }}
+              </h3>
+              <div class="feed-meta">
+                <span class="text-muted">{{ formatTime(item.collected_at) }}</span>
+                <span class="separator">·</span>
+                <span :class="['tag', 'tag-sm', sourceTagClass(item.source)]">{{ sourceLabel(item.source) }}</span>
+              </div>
             </div>
-          </article>
+          </a>
         </div>
       </section>
+
     </template>
 
     <button class="back-to-top-btn" type="button" @click="scrollToTop" title="回到顶部">
@@ -122,7 +156,7 @@
 import { ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
-import { deleteBriefing, fetchBriefingDetail } from '../api.js'
+import { deleteBriefing, fetchBriefingDetail, fetchFeed } from '../api.js'
 
 const props = defineProps({
   date: { type: String, required: true },
@@ -130,6 +164,7 @@ const props = defineProps({
 
 const router = useRouter()
 const briefing = ref(null)
+const feedItems = ref([])
 const loading = ref(true)
 const deleting = ref(false)
 const expandedBgs = ref(new Set())
@@ -142,16 +177,23 @@ function sourceTagClass(source) {
     hackernews: 'tag-hackernews',
     huggingface: 'tag-huggingface',
   }
-  return map[source] || 'tag-category'
+  return map[(source || '').toLowerCase()] || 'tag-category'
 }
 
 function sourceLabel(source) {
-  const map = {
-    github: 'GitHub',
-    hackernews: 'Hacker News',
-    huggingface: 'Hugging Face',
-  }
-  return map[source] || source
+  return source || 'RSS'
+}
+
+function scoreClass(score) {
+  if (score >= 90) return 'score-high'
+  if (score >= 70) return 'score-medium'
+  return 'score-low'
+}
+
+function formatTime(isoStr) {
+  if (!isoStr) return ''
+  const d = new Date(isoStr)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
 }
 
 function toggleBackground(id) {
@@ -212,21 +254,7 @@ function findNewsItemForMindmapText(text) {
 }
 
 function sourceNodeStyle(source) {
-  const map = {
-    github: {
-      fill: 'rgba(16, 185, 129, 0.42)',
-      stroke: 'rgba(16, 185, 129, 0.95)',
-    },
-    hackernews: {
-      fill: 'rgba(245, 158, 11, 0.42)',
-      stroke: 'rgba(245, 158, 11, 0.95)',
-    },
-    huggingface: {
-      fill: 'rgba(244, 63, 94, 0.42)',
-      stroke: 'rgba(244, 63, 94, 0.95)',
-    },
-  }
-  return map[source] || {
+  return {
     fill: 'rgba(99, 102, 241, 0.36)',
     stroke: 'rgba(99, 102, 241, 0.95)',
   }
@@ -332,13 +360,14 @@ function bindMindmapNodeClicks() {
 async function handleDeleteBriefing() {
   if (!briefing.value || deleting.value) return
 
-  const confirmed = window.confirm(`确定删除 ${props.date} 的早报及关联数据吗？删除后可重新生成。`)
+  const confirmed = window.confirm(`确定删除 ${props.date} 的早报吗？只删除精选摘要数据，实时资讯流将保留。`)
   if (!confirmed) return
 
   deleting.value = true
   try {
     await deleteBriefing(props.date)
-    router.push('/')
+    // 重新加载数据，不再返回首页
+    await loadData()
   } catch (err) {
     window.alert(`删除失败：${err.message}`)
   } finally {
@@ -347,13 +376,11 @@ async function handleDeleteBriefing() {
 }
 
 function renderMarkdown(text) {
-  // 先转义原始文本中的 HTML 标签，防止注入
   const escaped = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 
-  // 再将 Markdown 语法转换为安全的 HTML
   const html = escaped
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
@@ -365,7 +392,6 @@ function renderMarkdown(text) {
     .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
     .replace(/\n/g, '<br>')
 
-  // 最后用 DOMPurify 净化，只允许已知安全标签
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['strong', 'em', 'code', 'h2', 'h3', 'h4', 'ul', 'li', 'br'],
     ALLOWED_ATTR: [],
@@ -412,17 +438,25 @@ async function renderMermaid() {
   }
 }
 
-async function loadBriefing() {
+async function loadData() {
   loading.value = true
   briefing.value = null
+  feedItems.value = []
   deleting.value = false
   expandedBgs.value = new Set()
   highlightedNewsId.value = null
 
   try {
-    briefing.value = await fetchBriefingDetail(props.date)
+    // Vercel 最佳实践: async-parallel 并发获取相互独立的数据
+    const [briefingData, feedData] = await Promise.all([
+      fetchBriefingDetail(props.date).catch(() => null),
+      fetchFeed(props.date).catch(() => [])
+    ])
+    
+    briefing.value = briefingData
+    feedItems.value = feedData
   } catch (err) {
-    console.error('加载早报失败:', err)
+    console.error('加载数据失败:', err)
   } finally {
     loading.value = false
   }
@@ -433,12 +467,12 @@ async function loadBriefing() {
   }
 }
 
-onMounted(loadBriefing)
+onMounted(loadData)
 
 watch(
   () => props.date,
   () => {
-    loadBriefing()
+    loadData()
   },
 )
 </script>
@@ -462,7 +496,7 @@ watch(
 
 .empty-state {
   text-align: center;
-  padding: 4rem 1rem;
+  padding: 2rem 1rem;
 }
 
 /* Detail Header */
@@ -507,8 +541,10 @@ watch(
   overflow-x: auto;
 }
 
-.mindmap-section .section-title {
-  margin-bottom: 1rem;
+.section-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
 }
 
 .mermaid-container {
@@ -535,12 +571,6 @@ watch(
 /* News Section */
 .news-section {
   margin-bottom: 2rem;
-}
-
-.news-section .section-title {
-  font-size: 1.3rem;
-  font-weight: 700;
-  margin-bottom: 1.5rem;
 }
 
 .news-list {
@@ -712,6 +742,86 @@ watch(
   margin: 0.3rem 0;
 }
 
+/* Feed Section */
+.feed-section {
+  margin-top: 3rem;
+  margin-bottom: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.feed-card {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  gap: 1rem;
+  color: inherit;
+  transition: all var(--transition-fast);
+}
+
+.feed-card:hover {
+  transform: translateX(4px);
+  border-color: var(--color-border-hover);
+}
+
+.feed-score-wrapper {
+  flex-shrink: 0;
+  width: 40px;
+  text-align: center;
+}
+
+.feed-score {
+  font-weight: 800;
+  font-size: 1.1rem;
+}
+
+.score-high { color: var(--color-accent-rose); }
+.score-medium { color: var(--color-accent-amber); }
+.score-low { color: var(--color-text-muted); }
+
+.feed-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.feed-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.instant-badge {
+  font-size: 0.85rem;
+}
+
+.feed-meta {
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.separator {
+  color: var(--color-border);
+}
+
+.tag-sm {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+}
+
 @media (max-width: 640px) {
   .detail-header-main {
     flex-direction: column;
@@ -723,6 +833,15 @@ watch(
 
   .news-card {
     padding: 1rem;
+  }
+
+  .feed-card {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .feed-title {
+    font-size: 0.95rem;
   }
 }
 </style>
