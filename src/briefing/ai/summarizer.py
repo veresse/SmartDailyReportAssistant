@@ -3,38 +3,36 @@
 将每条新闻转化为「一句话结论 + 3个核心要点 + 为什么重要」的标准结构。
 """
 
-import json
 import logging
 
 from briefing.ai.client import chat_completion_json
 
 logger = logging.getLogger(__name__)
 
-_SUMMARIZE_PROMPT_TEMPLATE = """你是一个专业的科技新闻编辑。请为以下新闻生成结构化摘要。
+_CONTEXTUAL_SUMMARY_PROMPT = """你是一个资深的 AI 行业分析师。
 
-## 新闻信息
-- 标题: {title}
-- 来源: {source}
-- URL: {url}
-- 描述: {description}
-- 原文内容（部分）: {content}
+【今日新闻】
+- 标题：{title}
+- 来源：{source}
+- URL：{url}
+- 描述：{description}
+- 原文内容（部分）：{content}
 
-## 输出格式（JSON）
+【🧠 短期记忆：近期已阅资讯】
+{historical_context}
+
+【任务要求】
+1. 去重判断：如果今日新闻与【短期记忆】中某件事完全是重复报道，请务必在 `category` 返回 `[重复已阅]`。
+2. 脉络追踪：如果是【短期记忆】中某件事的后续进展，请在摘要中明确指出。
+3. 摘要用中文撰写，语言简洁精准。
+
+请返回 JSON：
 {{
-    "one_line_summary": "一句话概括这条新闻的核心信息（中文，不超过50字）",
-    "key_points": [
-        "核心要点1（中文）",
-        "核心要点2（中文）",
-        "核心要点3（中文）"
-    ],
-    "importance": "为什么这条新闻对开发者/研究员重要（中文，1-2句话）",
-    "category": "分类标签（如：开源项目、AI模型、前端框架、安全、DevOps 等）"
+    "one_line_summary": "一句话概括",
+    "key_points": ["要点1", "要点2", "结合历史脉络的分析"],
+    "importance": "为什么重要",
+    "category": "标签"
 }}
-
-要求：
-1. 摘要用中文撰写
-2. 语言简洁精准，突出技术价值
-3. key_points 正好3个
 """
 
 
@@ -44,18 +42,20 @@ def summarize_single(
     url: str,
     description: str,
     content: str,
+    historical_context: str = "",
 ) -> dict:
     """为单条新闻生成结构化摘要。
 
     Returns:
         包含 one_line_summary, key_points, importance, category 的字典
     """
-    prompt = _SUMMARIZE_PROMPT_TEMPLATE.format(
+    prompt = _CONTEXTUAL_SUMMARY_PROMPT.format(
         title=title,
         source=source,
         url=url,
         description=description[:500],
         content=content[:3000],
+        historical_context=historical_context or "暂无近期记忆。",
     )
 
     try:
@@ -76,26 +76,3 @@ def summarize_single(
             "category": "其他",
         }
 
-
-def summarize_batch(items: list[dict]) -> list[dict]:
-    """批量生成结构化摘要。
-
-    Args:
-        items: 每个元素需包含 title, source, url, description, raw_content 字段
-
-    Returns:
-        与输入等长的摘要列表
-    """
-    results = []
-    for item in items:
-        summary = summarize_single(
-            title=item.get("title", ""),
-            source=item.get("source", ""),
-            url=item.get("url", ""),
-            description=item.get("description", ""),
-            content=item.get("raw_content", ""),
-        )
-        results.append(summary)
-        logger.info("已摘要: %s", item.get("title", "")[:40])
-
-    return results

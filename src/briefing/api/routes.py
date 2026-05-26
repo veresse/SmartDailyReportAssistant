@@ -18,6 +18,20 @@ router = APIRouter(prefix="/api", tags=["briefing"])
 
 # ---- Response Schemas ----
 
+class RawNewsItemResponse(BaseModel):
+    """单条采集新闻响应。"""
+
+    id: int
+    source: str
+    title: str
+    url: str
+    description: str
+    score: int
+    published_at: str
+    collected_at: datetime
+    is_pushed_instantly: bool
+
+
 class BriefingItemResponse(BaseModel):
     """单条早报新闻响应。"""
 
@@ -108,7 +122,7 @@ def list_briefings(
     ]
 
 
-@router.get("/briefings/{date}", response_model=BriefingDetailResponse)
+@router.get("/briefings/{date}", response_model=BriefingDetailResponse | None)
 def get_briefing(date: str, db: Session = Depends(_get_db)):
     """获取指定日期的早报详情。"""
     briefing = (
@@ -118,12 +132,12 @@ def get_briefing(date: str, db: Session = Depends(_get_db)):
     )
 
     if not briefing:
-        raise HTTPException(status_code=404, detail=f"未找到 {date} 的早报")
+        return None
 
     items = [
         BriefingItemResponse(
             id=item.id,
-            source=item.source.value,
+            source=item.source,
             title=item.title,
             url=item.url,
             one_line_summary=item.one_line_summary,
@@ -147,9 +161,19 @@ def get_briefing(date: str, db: Session = Depends(_get_db)):
 
 
 @router.post("/trigger", response_model=TriggerResponse)
-def trigger_briefing(date: str | None = None):
-    """手动触发早报生成。"""
-    from briefing.scheduler.jobs import generate_daily_briefing
+def trigger_briefing(date: str | None = None, loop: str = "A"):
+    """手动触发早报或抓取。loop="A" 为高频抓取，loop="B" 为晨报生成。"""
+    from briefing.scheduler.jobs import fetch_and_instant_push, generate_daily_briefing
+    
+    if loop == "A":
+        try:
+            # 这里的调用最好是异步或放到后台执行，这里为了简单直接调用（如果抓取很慢可能会超时）
+            import threading
+            threading.Thread(target=fetch_and_instant_push).start()
+            return TriggerResponse(message="已触发高频抓取与打分 (后台运行中)")
+        except Exception as e:
+            logger.error("触发 Loop A 失败: %s", e)
+            raise HTTPException(status_code=500, detail=f"触发失败: {e}") from e
 
     if not date:
         from briefing.config import get_settings
@@ -157,6 +181,8 @@ def trigger_briefing(date: str | None = None):
         date = datetime.now(local_tz).strftime("%Y-%m-%d")
 
     try:
+        # 这里原来的逻辑是同步调用，为了前端能立刻拿到状态，也可以放到后台
+        # 考虑到兼容性，暂时保持原样（如果太慢可以后续改异步）
         briefing_id = generate_daily_briefing(date_str=date)
         return TriggerResponse(
             message=f"早报 {date} 生成完成",
@@ -210,10 +236,44 @@ def delete_briefing(date: str, db: Session = Depends(_get_db)):
 
 @router.get("/dates")
 def get_available_dates(db: Session = Depends(_get_db)):
-    """获取所有已生成早报的日期列表（供日历视图使用）。"""
-    briefings = (
-        db.query(DailyBriefing.date, DailyBriefing.status)
-        .order_by(DailyBriefing.date.desc())
+    """获取所有已生成早报或有采集数据的日期列表（供日历视图使用）。"""
+    from sqlalchemy import func
+    
+    # 1. 获取所有存在 feed 的日期及其数量
+    feed_counts = (
+        db.query(RawNewsItem.briefing_date, func.count(RawNewsItem.id).label("count"))
+        .group_by(RawNewsItem.briefing_date)
         .all()
     )
-    return [{"date": b.date, "status": b.status.value} for b in briefings]
+    feed_map = {row.briefing_date: row.count for row in feed_counts}
+
+    # 2. 获取所有已生成早报的日期
+    briefings = (
+        db.query(DailyBriefing.date, DailyBriefing.status)
+        .all()
+    )
+    briefing_map = {b.date: b.status.value for b in briefings}
+
+    # 3. 合并日期集合
+    all_dates = sorted(set(feed_map.keys()) | set(briefing_map.keys()), reverse=True)
+
+    return [
+        {
+            "date": date,
+            "status": briefing_map.get(date),
+            "feed_count": feed_map.get(date, 0),
+        }
+        for date in all_dates
+    ]
+
+@router.get("/feed/{date}", response_model=list[RawNewsItemResponse])
+def get_feed(date: str, limit: int = 200, db: Session = Depends(_get_db)):
+    """获取指定日期的实时采集资讯流。"""
+    items = (
+        db.query(RawNewsItem)
+        .filter(RawNewsItem.briefing_date == date)
+        .order_by(RawNewsItem.score.desc())
+        .limit(limit)
+        .all()
+    )
+    return items

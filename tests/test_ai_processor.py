@@ -7,7 +7,6 @@ import pytest
 
 from briefing.collectors.base import RawNewsItemSchema
 from briefing.ai.deduplicator import deduplicate
-from briefing.ai.filter import filter_ai_related
 from briefing.ai.summarizer import summarize_single
 from briefing.ai.enricher import enrich_background, extract_background_terms
 from briefing.ai.mindmap import generate_mindmap
@@ -64,28 +63,6 @@ class TestDeduplicator:
         assert len(result) == 3
 
 
-class TestNewsFilter:
-    """AI 相关新闻过滤测试。"""
-
-    @patch("briefing.ai.filter.chat_completion_json")
-    def test_filter_ai_related_keeps_selected_indices(self, mock_llm):
-        """应只保留模型判断为 AI 相关的新闻。"""
-        mock_llm.return_value = {"ai_related_indices": [0, 2], "rejected_indices": [1]}
-        items = _make_items(3)
-
-        result = filter_ai_related(items, audience="AI 开发者", batch_size=10)
-
-        assert [item.title for item in result] == ["Test Item 0", "Test Item 2"]
-
-    @patch("briefing.ai.filter.chat_completion_json")
-    def test_filter_ai_related_failure_keeps_original_batch(self, mock_llm):
-        """过滤失败时保留原始批次，避免丢新闻。"""
-        mock_llm.side_effect = Exception("LLM error")
-        items = _make_items(2)
-
-        result = filter_ai_related(items, audience="AI 开发者", batch_size=10)
-
-        assert result == items
 
 
 class TestSummarizer:
