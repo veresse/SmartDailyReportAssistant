@@ -61,3 +61,6 @@ temp/
 # skills
 .agent
 
+# 测试脚本
+tests/
+
