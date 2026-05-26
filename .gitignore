@@ -57,3 +57,6 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# skills
+.agent
