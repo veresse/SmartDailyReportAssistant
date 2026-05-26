@@ -15,6 +15,7 @@ from briefing.scheduler.jobs import (
     fetch_and_instant_push,
     generate_daily_briefing,
     mark_interrupted_briefings_failed,
+    cleanup_memory,
 )
 
 logging.basicConfig(
@@ -55,14 +56,30 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # 数据清理任务（新增）
+    scheduler.add_job(
+        cleanup_memory,
+        trigger=CronTrigger(
+            hour=settings.cleanup_hour,
+            minute=settings.cleanup_minute,
+            timezone=settings.timezone,
+        ),
+        id="cleanup_old_data",
+        name="数据清理：过期数据删除",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(
         "调度器已启动：\n"
         "- Loop A: 每 %d 分钟执行一次\n"
-        "- Loop B: 每天 %02d:%02d 执行",
+        "- Loop B: 每天 %02d:%02d 执行\n"
+        "- 数据清理: 每天 %02d:%02d 执行",
         settings.rss_fetch_interval_minutes,
         settings.schedule_hour,
         settings.schedule_minute,
+        settings.cleanup_hour,
+        settings.cleanup_minute,
     )
 
     yield

@@ -25,12 +25,32 @@ class Settings(BaseSettings):
     rss_fetch_interval_minutes: int = Field(default=30, description="RSS 抓取间隔分钟")
     rss_lookback_minutes: int = Field(default=120, description="RSS 抓取回溯窗口（分钟）")
     llm_concurrency: int = Field(default=5, description="LLM 处理并发数")
-    ai_filter_enabled: bool = Field(default=True, description="是否启用 AI 相关新闻过滤")
-    ai_filter_batch_size: int = Field(default=50, description="AI 新闻过滤批大小")
-    ai_filter_target_audience: str = Field(
-        default="AI 开发者、AI 研究员和关注大模型应用的技术团队",
-        description="AI 新闻过滤的目标读者群体",
+    # V0.3 个性化配置
+    user_persona: str = Field(
+        default="我是一名关注 AI 发展的技术人员，偏好开源项目和硬核技术解析，不看软文。",
+        description="注入给 LLM 的私人画像描述",
     )
+    
+    # V0.3 去重配置
+    title_similarity_threshold: float = Field(
+        default=0.85, description="Loop A 标题相似度硬拦截阈值"
+    )
+    
+    # V0.3 上下文配置
+    context_lookback_days: int = Field(
+        default=3, description="Loop B 向前追溯历史脉络的天数"
+    )
+    context_max_items: int = Field(
+        default=45, description="Loop B 注入历史上下文的最大条数"
+    )
+    
+    # V0.3 数据清理配置
+    cleanup_retention_days: int = Field(
+        default=7, description="数据库垃圾数据保留天数"
+    )
+    cleanup_hour: int = Field(default=3, description="数据清理任务执行小时")
+    cleanup_minute: int = Field(default=0, description="数据清理任务执行分钟")
+
     collect_max_items: int = Field(default=20, description="晨报最多收录的新闻条数")
 
     # 推送与打分阈值

@@ -42,6 +42,7 @@ class RawNewsItem(Base):
     raw_content = Column(Text, default="")
     score = Column(Integer, default=0)
     extra_data = Column(Text, default="{}")  # JSON 格式存储附加字段
+    ai_tags = Column(Text, default="[]")  # JSON: AI 提取的实体标签
     published_at = Column(String(50), default="")
     is_pushed_instantly = Column(Boolean, default=False)
     collected_at = Column(

@@ -2,8 +2,8 @@
   <div id="briefing-app">
     <nav class="navbar">
       <router-link to="/" class="navbar-brand">
-        <span class="logo-icon">⚡</span>
-        <span class="brand-text">AI Morning Briefing</span>
+        <span class="logo-mark">A.I.</span>
+        <span class="brand-text">Morning Briefing</span>
       </router-link>
       <div class="navbar-actions">
         <button
@@ -11,7 +11,7 @@
           :disabled="triggering"
           @click="triggerBriefing"
         >
-          {{ triggering ? '⏳ 抓取中...' : '🔄 抓取最新资讯' }}
+          {{ triggering ? '抓取中...' : '抓取最新资讯' }}
         </button>
       </div>
     </nav>
@@ -26,7 +26,7 @@
 
     <!-- Toast notifications -->
     <div class="toast-container">
-      <transition-group name="fade">
+      <transition-group name="toast">
         <div
           v-for="toast in toasts"
           :key="toast.id"
@@ -75,5 +75,13 @@ async function triggerBriefing() {
 .main-content {
   flex: 1;
   padding: 2rem 0;
+}
+.logo-mark {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  font-size: 1.2rem;
+  background: var(--gradient-text);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 </style>

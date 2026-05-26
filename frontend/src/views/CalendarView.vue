@@ -3,10 +3,10 @@
     <!-- Hero Section -->
     <section class="hero">
       <h1 class="hero-title">
-        <span class="text-gradient">AI Morning Briefing</span>
+        <span class="text-gradient">专属资讯助理</span>
       </h1>
       <p class="hero-subtitle">
-        每日 AI 技术速递 · GitHub · Hacker News · Hugging Face
+        基于您的画像，每日深度解析前沿技术资讯
       </p>
     </section>
 
@@ -40,9 +40,9 @@
         >
           <span v-if="cell.date" class="calendar-day">{{ cell.date }}</span>
           <div v-if="cell.hasData" class="calendar-indicators">
-            <span v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done" title="早报已生成">✓</span>
-            <span v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing" title="早报生成中">⟳</span>
-            <span v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed" title="早报生成失败">✗</span>
+            <div v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done" title="早报已生成"></div>
+            <div v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing" title="早报生成中"></div>
+            <div v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed" title="早报生成失败"></div>
             <span class="feed-count-badge" v-if="cell.feedCount > 0" title="今日资讯数量">{{ cell.feedCount }}</span>
           </div>
         </div>
@@ -51,7 +51,7 @@
 
     <!-- Recent Briefings -->
     <section class="recent-section">
-      <h2 class="section-title">📰 近期早报</h2>
+      <h2 class="section-title">近期报告</h2>
       <div v-if="loading" class="loading-grid">
         <div v-for="n in 3" :key="n" class="card skeleton-card">
           <div class="skeleton skeleton-title"></div>
@@ -70,7 +70,7 @@
           class="briefing-card card"
         >
           <div class="briefing-card-header">
-            <span class="briefing-date">📅 {{ b.date }}</span>
+            <span class="briefing-date">{{ b.date }}</span>
             <span :class="['tag', statusTagClass(b.status)]">{{ statusText(b.status) }}</span>
           </div>
           <p class="briefing-overview">{{ b.summary_overview }}</p>
@@ -310,40 +310,48 @@ onMounted(async () => {
 }
 
 .calendar-dot {
-  font-size: 0.65rem;
-  line-height: 1;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }
 
 .calendar-indicators {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .feed-count-badge {
   font-size: 0.6rem;
-  background: rgba(255,255,255,0.1);
-  padding: 1px 4px;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  background: var(--color-bg-glass);
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
   color: var(--color-text-secondary);
 }
 
 .calendar-dot--done {
-  color: var(--color-accent-emerald);
+  background-color: var(--color-accent-emerald);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
 }
 
 .calendar-dot--processing {
-  color: var(--color-accent-amber);
-  animation: spin 2s linear infinite;
+  background-color: var(--color-accent-amber);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+  animation: pulse-amber 1.5s infinite alternate;
 }
 
 .calendar-dot--failed {
-  color: var(--color-accent-rose);
+  background-color: var(--color-accent-rose);
+  box-shadow: 0 0 6px rgba(225, 29, 72, 0.4);
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@keyframes pulse-amber {
+  from { opacity: 0.5; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1.1); }
 }
 
 /* Recent Section */

@@ -14,3 +14,4 @@ class RawNewsItemSchema(BaseModel):
     score: int = 0
     extra_data: dict = Field(default_factory=dict)
     published_at: str = ""
+    ai_tags: list[str] = Field(default_factory=list)

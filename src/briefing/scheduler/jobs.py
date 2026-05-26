@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from briefing.ai.deduplicator import deduplicate
 from briefing.ai.enricher import enrich_background
-from briefing.ai.filter import filter_ai_related
+from rapidfuzz import fuzz
 from briefing.ai.mindmap import generate_mindmap
 from briefing.ai.scorer import score_single_news
 from briefing.ai.summarizer import summarize_single
@@ -31,6 +31,15 @@ def _bounded_workers(requested: int, total: int) -> int:
     return min(max(1, requested), total or 1)
 
 
+def _is_title_duplicate(new_title: str, existing_titles: list[str], threshold: float) -> bool:
+    """判断新标题是否与已有标题过度相似。"""
+    target = int(threshold * 100)
+    for existing in existing_titles:
+        if fuzz.ratio(new_title, existing) >= target:
+            return True
+    return False
+
+
 def fetch_and_instant_push():
     """Loop A: 高频抓取与即时推送。"""
     logger.info("开始执行 Loop A: 高频 RSS 抓取与即时推送...")
@@ -45,17 +54,31 @@ def fetch_and_instant_push():
             return
 
         # 2. 基于 URL 简单去重 (过滤掉数据库已有的)
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(days=2)
         existing_urls = {
             url[0] for url in session.query(RawNewsItem.url).filter(
-                RawNewsItem.collected_at >= datetime.now(timezone.utc) - timedelta(days=2)
+                RawNewsItem.collected_at >= recent_cutoff
             ).all()
         }
+        
+        # 获取过去 24 小时内 score >= 60 的标题，用于标题查重
+        title_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        recent_titles = [
+            t[0] for t in session.query(RawNewsItem.title).filter(
+                RawNewsItem.collected_at >= title_cutoff,
+                RawNewsItem.score >= settings.fetch_store_threshold
+            ).all()
+        ]
         
         new_items = []
         for item in raw_items:
             if item.url not in existing_urls:
-                new_items.append(item)
-                existing_urls.add(item.url)
+                if not _is_title_duplicate(item.title, recent_titles, settings.title_similarity_threshold):
+                    new_items.append(item)
+                    existing_urls.add(item.url)
+                    recent_titles.append(item.title)
+                else:
+                    logger.info("标题过于相似，丢弃: %s", item.title)
                 
         if not new_items:
             logger.info("Loop A 完成：抓取的数据已在数据库中存在")
@@ -84,6 +107,7 @@ def fetch_and_instant_push():
                     raw_content=item.raw_content,
                     score=item.score,
                     extra_data=json.dumps(item.extra_data, ensure_ascii=False),
+                    ai_tags=json.dumps(getattr(item, "ai_tags", []), ensure_ascii=False),
                     published_at=item.published_at,
                     briefing_date=datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d"),
                 )
@@ -144,7 +168,7 @@ def _send_instant_push(item):
         logger.error("即时快讯发送失败: %s", e)
 
 
-def _process_digest_item(item, trigger_ddgs: bool) -> dict:
+def _process_digest_item(item, trigger_ddgs: bool, historical_context: str = "") -> dict:
     """为单条晨报新闻生成摘要和补充背景。"""
     # 摘要
     summary = summarize_single(
@@ -153,6 +177,7 @@ def _process_digest_item(item, trigger_ddgs: bool) -> dict:
         url=item.url,
         description=item.description,
         content=item.raw_content,
+        historical_context=historical_context,
     )
     
     # 背景补充
@@ -226,13 +251,24 @@ def generate_daily_briefing(date_str: str | None = None) -> int | None:
         # 3. 语义去重
         deduped_items = deduplicate(schema_items)
 
-        # 4. AI 相关新闻过滤
-        if settings.ai_filter_enabled:
-            deduped_items = filter_ai_related(
-                deduped_items,
-                audience=settings.ai_filter_target_audience,
-                batch_size=settings.ai_filter_batch_size,
-            )
+        # 4. 构建历史上下文
+        history_cutoff = (
+            datetime.now(local_tz) - timedelta(days=settings.context_lookback_days)
+        ).strftime("%Y-%m-%d")
+        
+        history_items = (
+            session.query(BriefingItem)
+            .join(DailyBriefing)
+            .filter(DailyBriefing.date >= history_cutoff)
+            .order_by(DailyBriefing.date.desc(), BriefingItem.priority.asc())
+            .limit(settings.context_max_items)
+            .all()
+        )
+        
+        historical_context = ""
+        if history_items:
+            lines = [f"- [{item.briefing.date}] {item.title}：{item.one_line_summary}" for item in history_items]
+            historical_context = "\n".join(lines)
 
         # 按分数排序取 top N
         deduped_items.sort(key=lambda x: x.score, reverse=True)
@@ -244,13 +280,19 @@ def generate_daily_briefing(date_str: str | None = None) -> int | None:
             futures = []
             for item in top_items:
                 trigger_ddgs = (item.score >= settings.ddgs_trigger_threshold)
-                futures.append(executor.submit(_process_digest_item, item, trigger_ddgs))
+                futures.append(executor.submit(_process_digest_item, item, trigger_ddgs, historical_context))
                 
             for future in as_completed(futures):
                 try:
                     processed_results.append(future.result())
                 except Exception as e:
                     logger.error("处理单条新闻异常: %s", e)
+
+        # 过滤跨天重复
+        processed_results = [
+            r for r in processed_results
+            if "[重复已阅]" not in r["summary"].get("category", "")
+        ]
 
         # 5. 生成思维导图
         mindmap_data = [
@@ -346,8 +388,8 @@ def cleanup_memory():
     logger.info("开始清理过期数据...")
     session = get_session()
     try:
-        # 删除 7 天前的 RawNewsItem
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        # 删除过期数据的 RawNewsItem
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_retention_days)
         deleted = session.query(RawNewsItem).filter(RawNewsItem.collected_at < cutoff).delete()
         session.commit()
         logger.info("已清理 %d 条过期原始新闻数据", deleted)

@@ -7,26 +7,29 @@ import logging
 
 from briefing.ai.client import chat_completion_json
 from briefing.collectors.base import RawNewsItemSchema
+from briefing.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_SCORING_PROMPT_TEMPLATE = """你是一个资深的 AI 领域技术分析师。请为以下新闻条目进行评估并打分（0-100分）。
+_PERSONALIZED_SCORING_PROMPT = """你是一个专属于我的私人 AI 技术助理。请根据我的【个人画像与偏好】，评估以下新闻对我的实际阅读价值。
 
-## 评估标准
-- 90-100分：具有重大行业影响力的突破性新闻（如 GPT-4 / Llama 3 发布、重大 AI 开源模型发布、影响深远的 AI 技术突破或严重安全漏洞）。
-- 70-89分：值得关注的重要技术更新、优秀的 AI 开源项目发布、有深度价值的 AI 研究论文或技术文章。
-- 60-69分：常规 AI 技术动态、小版本更新、普通的工具发布。
-- 0-59分：非 AI 相关内容、水文、PR稿件、过度营销或重复信息。
+## 👨‍💻 我的个人画像
+{user_persona}
 
-## 新闻信息
+## 📰 新闻信息
 - 来源：{source}
 - 标题：{title}
-- 描述摘要：{description}
+- 摘要：{description}
 
-请仅返回以下 JSON 格式：
+## 📊 任务规则
+1. 价值评估 (0-100分)：严格匹配我的画像。精准踩中痛点给 85 分以上；非关注领域或公关水文绝不超过 59 分。
+2. 实体提取：提取 1-3 个核心专有名词作为标签。
+
+请仅返回 JSON 格式：
 {{
+    "analysis": "评估理由",
     "score": 85,
-    "reason": "简要的打分理由（一句话）"
+    "ai_tags": ["标签1", "标签2"]
 }}
 """
 
@@ -44,7 +47,10 @@ def score_single_news(item: RawNewsItemSchema) -> RawNewsItemSchema:
     if not text_to_eval:
         text_to_eval = item.raw_content.strip()
     
-    prompt = _SCORING_PROMPT_TEMPLATE.format(
+    settings = get_settings()
+    
+    prompt = _PERSONALIZED_SCORING_PROMPT.format(
+        user_persona=settings.user_persona,
         source=item.source,
         title=item.title,
         description=text_to_eval[:1500]
@@ -53,13 +59,19 @@ def score_single_news(item: RawNewsItemSchema) -> RawNewsItemSchema:
     try:
         result = chat_completion_json(prompt, temperature=0.1)
         score = result.get("score", 0)
-        reason = result.get("reason", "")
+        analysis = result.get("analysis", "")
+        ai_tags = result.get("ai_tags", [])
         
+        if not isinstance(ai_tags, list):
+            ai_tags = []
+            
         item.score = min(max(int(score), 0), 100)
-        item.extra_data["score_reason"] = reason
+        item.extra_data["score_reason"] = analysis
+        item.ai_tags = [str(tag) for tag in ai_tags]
     except Exception as e:
         logger.warning("打分失败 (%s): %s", item.title[:40], e)
         item.score = 0
         item.extra_data["score_reason"] = "AI 评估异常"
+        item.ai_tags = []
         
     return item

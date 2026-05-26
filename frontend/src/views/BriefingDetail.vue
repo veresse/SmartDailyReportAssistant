@@ -21,7 +21,7 @@
         <div class="detail-header-main">
           <div>
             <h1 class="detail-title">
-              📰 {{ date }} 资讯
+              {{ date }} 资讯汇编
             </h1>
             <p class="detail-overview" v-if="briefing?.summary_overview">
               {{ briefing.summary_overview }}
@@ -42,13 +42,13 @@
       <template v-if="briefing && briefing.status === 'completed'">
         <!-- Mindmap -->
         <section v-if="briefing.mindmap_mermaid" class="mindmap-section card">
-          <h2 class="section-title">🧠 技术演进思维导图</h2>
+          <h2 class="section-title">技术演进网络</h2>
           <div ref="mermaidContainer" class="mermaid-container"></div>
         </section>
 
         <!-- News Items -->
         <section class="news-section" v-if="briefing.items?.length">
-          <h2 class="section-title">📋 核心新闻摘要 ({{ briefing.items.length }})</h2>
+          <h2 class="section-title">核心资讯精选 ({{ briefing.items.length }})</h2>
 
           <div class="news-list">
             <article
@@ -59,6 +59,7 @@
                 'news-card',
                 'card',
                 { 'news-card--highlighted': highlightedNewsId === item.id },
+                { 'news-card--dimmed': item.category?.includes('[重复已阅]') }
               ]"
             >
               <div class="news-card-header">
@@ -87,7 +88,7 @@
 
               <!-- Importance -->
               <p v-if="item.importance" class="importance">
-                <strong>💡 为什么重要：</strong>{{ item.importance }}
+                <strong>核心价值：</strong>{{ item.importance }}
               </p>
 
               <!-- Background Toggle -->
@@ -96,7 +97,7 @@
                   class="btn btn-ghost btn-sm toggle-bg-btn"
                   @click="toggleBackground(item.id)"
                 >
-                  {{ expandedBgs.has(item.id) ? '收起背景知识 ▲' : '展开背景知识 ▼' }}
+                  {{ expandedBgs.has(item.id) ? '收起领域背景' : '展开领域背景' }}
                 </button>
                 <transition name="slide-up">
                   <div
@@ -113,7 +114,7 @@
 
       <!-- ⚡ 实时资讯流区域 -->
       <section class="feed-section">
-        <h2 class="section-title">⚡ 实时资讯流 ({{ feedItems.length }})</h2>
+        <h2 class="section-title">实时资讯流 ({{ feedItems.length }})</h2>
         <div v-if="feedItems.length === 0" class="empty-state">
           <p class="text-muted">今日暂无采集数据。</p>
         </div>
@@ -138,6 +139,10 @@
                 <span class="text-muted">{{ formatTime(item.collected_at) }}</span>
                 <span class="separator">·</span>
                 <span :class="['tag', 'tag-sm', sourceTagClass(item.source)]">{{ sourceLabel(item.source) }}</span>
+                <template v-if="parseAITags(item.ai_tags).length">
+                  <span class="separator">·</span>
+                  <span v-for="tag in parseAITags(item.ai_tags)" :key="tag" class="tag tag-sm tag-ai-entity">{{ tag }}</span>
+                </template>
               </div>
             </div>
           </a>
@@ -194,6 +199,17 @@ function formatTime(isoStr) {
   if (!isoStr) return ''
   const d = new Date(isoStr)
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+function parseAITags(tagsStr) {
+  if (!tagsStr) return [];
+  if (Array.isArray(tagsStr)) return tagsStr;
+  try {
+    const tags = JSON.parse(tagsStr);
+    return Array.isArray(tags) ? tags : [];
+  } catch (e) {
+    return [];
+  }
 }
 
 function toggleBackground(id) {
@@ -587,6 +603,17 @@ watch(
 .news-card--highlighted {
   border-color: var(--color-accent-cyan);
   box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.45), var(--shadow-glow);
+}
+
+.news-card--dimmed {
+  opacity: 0.55;
+  filter: grayscale(0.5);
+  transition: opacity var(--transition-normal);
+}
+
+.news-card--dimmed:hover {
+  opacity: 0.95;
+  filter: grayscale(0);
 }
 
 .mermaid-container :deep(.mindmap-clickable-node) {
