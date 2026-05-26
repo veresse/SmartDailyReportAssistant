@@ -58,5 +58,11 @@ tmp/
 temp/
 *.tmp
 
+<<<<<<< HEAD
 # skills
 .agent
+=======
+
+# skills
+.agent/
+>>>>>>> 134ba7e275b9d1bde796d3cfab1d47e45b34c64e

@@ -3,10 +3,10 @@
     <!-- Hero Section -->
     <section class="hero">
       <h1 class="hero-title">
-        <span class="text-gradient">AI Morning Briefing</span>
+        <span class="text-gradient">专属资讯助理</span>
       </h1>
       <p class="hero-subtitle">
-        每日 AI 技术速递 · GitHub · Hacker News · Hugging Face
+        基于您的画像，每日深度解析前沿技术资讯
       </p>
     </section>
 
@@ -30,24 +30,28 @@
             {
               'calendar-cell--empty': !cell.date,
               'calendar-cell--today': cell.isToday,
+              'calendar-cell--has-data': cell.hasData,
               'calendar-cell--has-briefing': cell.status === 'completed',
               'calendar-cell--processing': cell.status === 'processing' || cell.status === 'collecting',
               'calendar-cell--failed': cell.status === 'failed',
             },
           ]"
-          @click="cell.status === 'completed' && goToBriefing(cell.dateStr)"
+          @click="cell.hasData && goToBriefing(cell.dateStr)"
         >
           <span v-if="cell.date" class="calendar-day">{{ cell.date }}</span>
-          <span v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done">✓</span>
-          <span v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing">⟳</span>
-          <span v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed">✗</span>
+          <div v-if="cell.hasData" class="calendar-indicators">
+            <div v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done" title="早报已生成"></div>
+            <div v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing" title="早报生成中"></div>
+            <div v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed" title="早报生成失败"></div>
+            <span class="feed-count-badge" v-if="cell.feedCount > 0" title="今日资讯数量">{{ cell.feedCount }}</span>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- Recent Briefings -->
     <section class="recent-section">
-      <h2 class="section-title">📰 近期早报</h2>
+      <h2 class="section-title">近期报告</h2>
       <div v-if="loading" class="loading-grid">
         <div v-for="n in 3" :key="n" class="card skeleton-card">
           <div class="skeleton skeleton-title"></div>
@@ -66,7 +70,7 @@
           class="briefing-card card"
         >
           <div class="briefing-card-header">
-            <span class="briefing-date">📅 {{ b.date }}</span>
+            <span class="briefing-date">{{ b.date }}</span>
             <span :class="['tag', statusTagClass(b.status)]">{{ statusText(b.status) }}</span>
           </div>
           <p class="briefing-overview">{{ b.summary_overview }}</p>
@@ -87,7 +91,7 @@ import { fetchDates, fetchBriefings } from '../api.js'
 const router = useRouter()
 const currentYear = ref(new Date().getFullYear())
 const currentMonth = ref(new Date().getMonth()) // 0-indexed
-const briefingDates = ref({}) // { "2025-05-19": "completed", ... }
+const briefingDates = ref({}) // { "2025-05-19": { status: "completed", feedCount: 42 }, ... }
 const recentBriefings = ref([])
 const loading = ref(true)
 
@@ -119,11 +123,14 @@ const calendarCells = computed(() => {
       today.getMonth() === month &&
       today.getDate() === d
 
+    const dateInfo = briefingDates.value[dateStr] || {}
     cells.push({
       date: d,
       dateStr,
       isToday,
-      status: briefingDates.value[dateStr] || null,
+      hasData: !!dateInfo.status || !!dateInfo.feedCount,
+      status: dateInfo.status || null,
+      feedCount: dateInfo.feedCount || 0,
     })
   }
 
@@ -181,7 +188,10 @@ onMounted(async () => {
 
     // 构建日期 -> 状态映射
     for (const d of dates) {
-      briefingDates.value[d.date] = d.status
+      briefingDates.value[d.date] = {
+        status: d.status,
+        feedCount: d.feed_count || 0
+      }
     }
 
     recentBriefings.value = briefings
@@ -271,16 +281,18 @@ onMounted(async () => {
   background: rgba(99, 102, 241, 0.08);
 }
 
-.calendar-cell--has-briefing {
+.calendar-cell--has-data {
   cursor: pointer;
-  background: var(--gradient-card);
-  border-color: rgba(99, 102, 241, 0.2);
+  background: var(--color-bg-card);
 }
 
-.calendar-cell--has-briefing:hover {
+.calendar-cell--has-data:hover {
   border-color: var(--color-accent-indigo);
-  box-shadow: var(--shadow-glow);
   transform: scale(1.05);
+}
+
+.calendar-cell--has-briefing {
+  background: var(--gradient-card);
 }
 
 .calendar-cell--processing {
@@ -298,26 +310,48 @@ onMounted(async () => {
 }
 
 .calendar-dot {
-  font-size: 0.65rem;
-  line-height: 1;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.calendar-indicators {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.feed-count-badge {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  background: var(--color-bg-glass);
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
 }
 
 .calendar-dot--done {
-  color: var(--color-accent-emerald);
+  background-color: var(--color-accent-emerald);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
 }
 
 .calendar-dot--processing {
-  color: var(--color-accent-amber);
-  animation: spin 2s linear infinite;
+  background-color: var(--color-accent-amber);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+  animation: pulse-amber 1.5s infinite alternate;
 }
 
 .calendar-dot--failed {
-  color: var(--color-accent-rose);
+  background-color: var(--color-accent-rose);
+  box-shadow: 0 0 6px rgba(225, 29, 72, 0.4);
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@keyframes pulse-amber {
+  from { opacity: 0.5; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1.1); }
 }
 
 /* Recent Section */

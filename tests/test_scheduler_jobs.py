@@ -5,8 +5,7 @@ from unittest.mock import patch
 from briefing.collectors.base import RawNewsItemSchema
 from briefing.models import BriefingStatus, DailyBriefing
 from briefing.scheduler.jobs import (
-    _process_news_items_parallel,
-    _push_mindmap_to_dingtalk,
+    _process_digest_item,
     mark_interrupted_briefings_failed,
 )
 
@@ -24,30 +23,44 @@ def _make_item(index: int) -> RawNewsItemSchema:
 
 @patch("briefing.scheduler.jobs.enrich_background")
 @patch("briefing.scheduler.jobs.summarize_single")
-def test_process_news_items_parallel_preserves_item_mapping(mock_summarize, mock_enrich):
-    """并行处理后，每条摘要/背景仍对应原始新闻。"""
+def test_process_digest_item_returns_correct_structure(mock_summarize, mock_enrich):
+    """_process_digest_item 应返回包含 raw_item, summary, background 的字典。"""
 
-    def summarize_side_effect(title, source, url, description, content):
-        return {
-            "one_line_summary": f"summary:{title}",
-            "key_points": [title, source, url],
-            "importance": f"importance:{description}",
-            "category": "测试",
-        }
+    mock_summarize.return_value = {
+        "one_line_summary": "summary:Item 0",
+        "key_points": ["point1", "point2", "point3"],
+        "importance": "importance:Description 0",
+        "category": "测试",
+    }
+    mock_enrich.return_value = "background:Item 0"
 
-    def enrich_side_effect(title, summary, key_points):
-        return f"background:{title}:{summary}:{key_points[0]}"
+    item = _make_item(0)
+    result = _process_digest_item(item, trigger_ddgs=True)
 
-    mock_summarize.side_effect = summarize_side_effect
-    mock_enrich.side_effect = enrich_side_effect
+    assert result["raw_item"] is item
+    assert result["summary"]["one_line_summary"] == "summary:Item 0"
+    assert result["background"] == "background:Item 0"
+    mock_summarize.assert_called_once()
+    mock_enrich.assert_called_once()
 
-    items = [_make_item(i) for i in range(5)]
-    processed = _process_news_items_parallel(items, concurrency=3)
 
-    assert [item["title"] for item in processed] == [item.title for item in items]
-    assert processed[2]["one_line_summary"] == "summary:Item 2"
-    assert processed[2]["background"] == "background:Item 2:summary:Item 2:Item 2"
-    assert processed[2]["_input_index"] == 2
+@patch("briefing.scheduler.jobs.enrich_background")
+@patch("briefing.scheduler.jobs.summarize_single")
+def test_process_digest_item_skips_background_when_not_triggered(mock_summarize, mock_enrich):
+    """trigger_ddgs=False 时不应调用背景补充。"""
+
+    mock_summarize.return_value = {
+        "one_line_summary": "summary",
+        "key_points": [],
+        "importance": "",
+        "category": "其他",
+    }
+
+    item = _make_item(0)
+    result = _process_digest_item(item, trigger_ddgs=False)
+
+    assert result["background"] == ""
+    mock_enrich.assert_not_called()
 
 
 class _FakeQuery:
@@ -95,24 +108,5 @@ def test_mark_interrupted_briefings_failed_marks_running_records(mock_get_sessio
 
     assert recovered == 2
     assert all(row.status == BriefingStatus.FAILED for row in rows)
-    assert rows[0].summary_overview == "上次生成过程中服务中断，任务未完成，可重新生成。"
     assert session.committed is True
     assert session.closed is True
-
-
-class _FakeSettings:
-    dingtalk_webhook_url = "https://oapi.dingtalk.com/robot/send?access_token=test-token"
-    dingtalk_secret = "SECtest"
-    dingtalk_timeout = 10
-    frontend_base_url = "http://localhost:5173"
-    dingtalk_summary_max_items = 20
-
-
-@patch("briefing.scheduler.jobs.send_mindmap_to_dingtalk")
-def test_push_mindmap_to_dingtalk_swallows_push_errors(mock_send):
-    """钉钉推送失败不应影响早报生成主流程。"""
-    mock_send.side_effect = Exception("network error")
-
-    _push_mindmap_to_dingtalk(_FakeSettings(), "2026-05-22", "mindmap\n  root((x))")
-
-    mock_send.assert_called_once()

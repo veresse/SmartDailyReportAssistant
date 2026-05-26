@@ -75,6 +75,7 @@ def send_mindmap_to_dingtalk(
     news_items: list[dict] | None = None,
     summary_max_items: int = 20,
     secret: str | None = None,
+    keyword: str = "【日报】",
     timeout: int = 10,
 ) -> dict:
     """将思维导图图片和前端详情链接推送到钉钉群机器人。"""
@@ -90,9 +91,9 @@ def send_mindmap_to_dingtalk(
     payload = {
         "msgtype": "markdown",
         "markdown": {
-            "title": f"{date} 技术演进思维导图",
+            "title": f"{keyword} {date} 技术演进思维导图",
             "text": (
-                f"### {date} 技术演进思维导图\n\n"
+                f"### {keyword} {date} 技术演进思维导图\n\n"
                 f"[![{date} 技术演进思维导图]({image_url})]({detail_url})\n\n"
                 f"如果图片无法点击，请打开：[查看完整早报]({detail_url})"
                 f"{fallback_text}"

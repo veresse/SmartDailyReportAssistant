@@ -1,182 +1,132 @@
-# 智能 AI 开发者早报系统
+# ⚡ AI Morning Briefing (专属智能技术资讯助理)
 
-自动采集 GitHub Trending、Hacker News、Hugging Face 等技术信息源，筛选 AI 相关新闻，并用大模型生成结构化早报、背景知识和技术演进思维导图。
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.12+-blue.svg)
+![Vue](https://img.shields.io/badge/vue-3.x-4fc08d.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)
 
-## 功能概览
+**AI Morning Briefing** 是一个面向极客与开发者的“个人专属 AI 资讯助理”。它能够自动从 GitHub Trending、Hacker News、Hugging Face 等高质量信息源采集数据，并利用大语言模型（LLM）根据**您的个人画像**进行深度筛选、打分、去重与总结。最后，通过钉钉推送或极简暗黑风的 Web 面板，为您呈现结构化的晨报与技术演进网络。
 
-- 多源采集：GitHub Trending、Hacker News Top Stories、Hugging Face Papers/Models/Spaces。
-- AI 新闻过滤：先按目标读者筛选 AI 相关内容，再进入摘要流程。
-- 语义去重：合并不同来源中指向同一事件/项目的话题。
-- 结构化摘要：生成一句话总结、核心要点、重要性说明和分类。
-- 背景知识补充：识别术语/模型/项目/公司等关键词，使用 DDGS 联网检索后再让 LLM 补充背景。
-- 技术演进思维导图：生成 Mermaid mindmap，并在前端渲染为可交互图。
-- 前端看板：日历视图、早报详情页、思维导图节点跳转到对应新闻。
-- 钉钉推送：早报生成后推送思维导图图片链接、前端详情链接和文字兜底摘要。
-- 任务恢复：后端重启时会把中断遗留的 processing/collecting 任务标记为 failed。
-- 重新生成：详情页可删除某日早报及关联数据，再重新生成。
+---
 
-## 技术栈
+## ✨ 核心特性 (V0.3)
 
-- 后端：Python 3.12、FastAPI、SQLAlchemy、APScheduler、OpenAI-compatible API、DDGS。
-- 前端：Vue 3、Vue Router、Vite、Mermaid、DOMPurify。
-- 默认数据库：SQLite，路径为 `data/briefing.db`。
+* **🤖 强个性化推荐 (Persona-based)**：彻底告别信息过载。通过 `.env` 中的 `USER_PERSONA` 定义你的技术栈与偏好，AI 助理会像资深技术编辑一样为你过滤并打分，仅保留真正对你有用的硬核资讯。
+* **🛡️ 三层智能去重管线**：
+  * **拦截层**：利用 `rapidfuzz` 过滤历史 24 小时的高相似度标题新闻，节约 Token 开销。
+  * **语义层**：同日不同源事件（如同一个开源项目在 GitHub 和 HN 同时上榜）语义聚合。
+  * **记忆层**：注入过去 3 天的短期记忆作为上下文，如果新闻在近期已报道，AI 将打上 `[重复已阅]` 标签并在前端视觉降级。
+* **🏷️ AI 智能标签 (`ai_tags`)**：大模型会在分析新闻时自动提取前沿实体与概念标签，形成赛博朋克风的专属词库。
+* **🧠 技术演进网络**：自动梳理当日各新闻的关联脉络，生成 Mermaid 思维导图。
+* **📱 全端适配与推送**：支持钉钉群机器人的富文本（含导图与链接）推送，安全策略适配自定义关键字（如 `【日报】`）；同时提供极简冷峻风 (Dark-Glassmorphism) 的专属 Web Dashboard。
+* **🧹 自动化存储管理**：轻量级 SQLite 单体存储，内置后台清理机制，自动清除过期（默认 7 天）的历史冗余抓取记录，保持系统轻快。
 
-## 目录结构
+---
 
-```text
-src/briefing/
-  ai/             # 去重、过滤、摘要、背景补充、思维导图生成
-  api/            # FastAPI 路由
-  collectors/     # 多源采集器
-  push/           # 钉钉等推送适配
-  scheduler/      # 早报生成编排与定时任务
-frontend/         # Vue 前端
-tests/            # 后端单元测试
-docs/             # 需求文档
-test/             # 原始采集脚本参考
-```
+## 🛠️ 技术栈
 
-## 环境准备
+* **后端引擎**：Python 3.12 + FastAPI + SQLAlchemy + APScheduler + rapidfuzz
+* **大模型驱动**：兼容 OpenAI API 规范的 LLM + DuckDuckGo Search (背景检索)
+* **前端界面**：Vue 3 + Vite + Vue Router + DOMPurify + Mermaid
+* **数据库**：无外部依赖的极简本地 SQLite
 
-后端使用 `uv` 管理依赖：
+---
+
+## 📦 快速开始
+
+### 1. 环境准备
+
+本项目后端推荐使用 [uv](https://github.com/astral-sh/uv) 进行极速依赖管理。
 
 ```bash
+# 克隆仓库
+git clone https://github.com/yourusername/briefing_generation.git
+cd briefing_generation
+
+# 后端依赖安装
 uv sync --extra dev
-```
 
-前端安装依赖：
-
-```bash
+# 前端依赖安装
 cd frontend
 npm install
 ```
 
-## 配置
+### 2. 环境配置
 
-复制环境变量模板：
+回到项目根目录，复制配置文件并填写：
 
 ```bash
 cp .env.example .env
 ```
 
-Windows PowerShell 可使用：
+**关键配置项**说明（在 `.env` 中）：
 
-```powershell
-Copy-Item .env.example .env
-```
-
-至少需要配置：
-
-```env
-LLM_API_KEY=your-api-key-here
+```ini
+# --- LLM 核心配置 ---
+LLM_API_KEY=your_api_key_here
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o
-DATABASE_URL=sqlite:///./data/briefing.db
-FRONTEND_BASE_URL=http://localhost:5173
+
+# --- V0.3 个性化调教 ---
+# 定义你自己的画像，越详细，推荐越准
+USER_PERSONA="我是一名资深后端架构师，主要关注 Python、Go 生态，以及 LLM Agent 落地应用..."
+# 只有打分大于等于该值的资讯才会进入早报
+SCORE_THRESHOLD=75
+
+# --- 钉钉推送配置 (可选) ---
+DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=your_token
+DINGTALK_SECRET=SECxxxxxxxxxxxxxxxxxxxx
 ```
 
-钉钉推送可选配置：
+### 3. 一键启动
 
-```env
-DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=your-token
-DINGTALK_SECRET=SECxxxxxxxxxxxxxxxx
-DINGTALK_TIMEOUT=10
-DINGTALK_SUMMARY_MAX_ITEMS=20
-```
-
-注意：`.env` 包含密钥和 webhook，不要提交到 Git。
-
-## 启动
-
-启动后端：
-
+**启动后端 API 与调度任务**：
 ```bash
 uv run uvicorn briefing.main:app --reload --port 8000
 ```
 
-启动前端：
-
+**启动前端开发服务器**：
 ```bash
 cd frontend
 npm run dev
 ```
 
-前端默认访问：
+* 默认前端访问地址：http://localhost:5173
+* 后端 API 文档：http://localhost:8000/docs
 
-```text
-http://localhost:5173
-```
+---
 
-后端健康检查：
+## 📅 工作流说明 (Loops)
 
-```text
-http://localhost:8000/health
-```
+系统后端由精准的定时任务调度器（APScheduler）驱动，分为三个循环管线：
 
-## 常用 API
+1. **Loop A (高频资讯雷达)**：每两小时执行一次。并行从各数据源采集资讯，经过第一层“标题相似度比对”后，交由 LLM 根据 `USER_PERSONA` 进行打分并提取 `ai_tags`。只有高分内容会落库留存。
+2. **Loop B (每日早报总装)**：每天早晨 8:00 执行（可配置）。从过去 24 小时内的高分库中提取数据，结合历史 3 天的短期记忆（防御性去重），生成包含一句话总结、核心价值、背景补充以及技术演进思维导图的完整早报。
+3. **Loop C (自净管线)**：每天凌晨 2:00 执行。自动清理超过保留期限（`CLEANUP_RETENTION_DAYS`）的无用原始垃圾数据，压缩 SQLite 体积。
 
-- `GET /api/briefings`：早报列表。
-- `GET /api/briefings/{date}`：指定日期早报详情。
-- `POST /api/trigger?date=YYYY-MM-DD`：手动生成指定日期早报；不传 `date` 时生成今天。
-- `DELETE /api/briefings/{date}`：删除指定日期早报、核心新闻和原始采集数据。
-- `GET /api/dates`：日历可用日期。
+---
 
-## 流程说明
+## 📚 常用 API (开发者)
 
-1. 启动时初始化数据库并注册定时任务。
-2. 采集多个平台的候选新闻。
-3. 保存原始数据到 `raw_news_items`。
-4. 使用 LLM 语义去重。
-5. 使用 LLM 按目标读者筛选 AI 相关新闻。
-6. 并行调用 LLM 生成摘要和背景知识。
-7. 生成 Mermaid 思维导图。
-8. 保存 `daily_briefings` 和 `briefing_items`。
-9. 如果配置了钉钉 webhook，则推送思维导图图片链接、详情页链接和文字摘要。
+| 接口路径 | 方法 | 说明 |
+|----------|------|------|
+| `/api/briefings` | GET | 获取近期生成的早报列表 |
+| `/api/briefings/{date}` | GET | 获取指定日期的早报详情（含精选与资讯流） |
+| `/api/trigger?loop=A` | POST | 手动触发高频资讯抓取任务 (Loop A) |
+| `/api/trigger?date=YYYY-MM-DD` | POST | 手动触发或重做某日的早报生成 (Loop B) |
+| `/api/briefings/{date}` | DELETE | 删除指定日期早报数据及精选资讯 |
 
-## 测试与构建
+---
 
-后端测试：
+## 🤝 参与贡献
 
+欢迎提交 Pull Request 或 Issue！
+
+提交代码前请确保通过所有单元测试：
 ```bash
-uv run pytest
+uv run pytest -v
 ```
 
-或：
+## 📄 开源协议
 
-```bash
-.venv/Scripts/python.exe -m pytest
-```
-
-前端构建：
-
-```bash
-cd frontend
-npm run build
-```
-
-## Git 提交建议
-
-推荐提交：
-
-- `src/`
-- `frontend/src/`
-- `frontend/public/`
-- `tests/`
-- `docs/`
-- `pyproject.toml`
-- `uv.lock`
-- `frontend/package.json`
-- `frontend/package-lock.json`
-- `.env.example`
-- `.gitignore`
-- `README.md`
-
-不要提交：
-
-- `.env`
-- `.venv/`
-- `data/*.db`
-- `__pycache__/`
-- `.pytest_cache/`
-- `frontend/node_modules/`
-- `frontend/dist/`
+本项目采用 [MIT License](LICENSE) 开源。
