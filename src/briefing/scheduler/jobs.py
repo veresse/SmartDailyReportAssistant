@@ -121,13 +121,14 @@ def _send_instant_push(item):
     
     url = _build_signed_webhook_url(settings.dingtalk_webhook_url, settings.dingtalk_secret)
     score_reason = item.extra_data.get("score_reason", "")
+    keyword = settings.dingtalk_keyword
     
     payload = {
         "msgtype": "markdown",
         "markdown": {
-            "title": f"⚡ AI 突发快讯：{item.title}",
+            "title": f"{keyword} ⚡ AI 突发快讯：{item.title}",
             "text": (
-                f"### ⚡ AI 重磅快讯 ({item.score}分)\n\n"
+                f"### {keyword} ⚡ AI 重磅快讯 ({item.score}分)\n\n"
                 f"**[{item.title}]({item.url})**\n\n"
                 f"> {item.description[:300]}...\n\n"
                 f"**上榜理由**：{score_reason}\n\n"
@@ -137,7 +138,7 @@ def _send_instant_push(item):
     }
     
     try:
-        requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+        requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
         logger.info("已发送即时快讯: %s", item.title)
     except Exception as e:
         logger.error("即时快讯发送失败: %s", e)
@@ -300,6 +301,7 @@ def generate_daily_briefing(date_str: str | None = None) -> int | None:
                     news_items=news_fallback,
                     summary_max_items=settings.dingtalk_summary_max_items,
                     secret=settings.dingtalk_secret,
+                    keyword=settings.dingtalk_keyword,
                 )
                 logger.info("早报 %s 推送钉钉成功", date_str)
             except Exception as e:

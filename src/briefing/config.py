@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     # 推送（Phase 2，可选）
     frontend_base_url: str = Field(default="http://localhost:5173", description="前端访问地址")
     dingtalk_webhook_url: str | None = Field(default=None, description="钉钉 Webhook URL")
-    dingtalk_secret: str | None = Field(default=None, description="钉钉机器人加签密钥")
+    dingtalk_secret: str | None = Field(default=None, description="钉钉机器人加签密钥（加签模式时填写）")
+    dingtalk_keyword: str = Field(default="【日报】", description="钉钉机器人自定义关键词（关键词模式时填写）")
     dingtalk_timeout: int = Field(default=10, description="钉钉推送超时时间（秒）")
     dingtalk_summary_max_items: int = Field(default=20, description="钉钉兜底新闻摘要最大条数")
 

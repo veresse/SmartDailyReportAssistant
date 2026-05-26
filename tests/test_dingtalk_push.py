@@ -63,6 +63,7 @@ def test_send_mindmap_to_dingtalk_sends_image_link_and_fallback(mock_post):
 
     payload = mock_post.call_args.kwargs["json"]
     text = payload["markdown"]["text"]
+    title = payload["markdown"]["title"]
     assert result["errcode"] == 0
     assert payload["msgtype"] == "markdown"
     assert "https://mermaid.ink/img/" in text
@@ -70,6 +71,9 @@ def test_send_mindmap_to_dingtalk_sends_image_link_and_fallback(mock_post):
     assert "新闻 A" in text
     assert "一句话摘要 A" in text
     assert "```mermaid" not in text
+    # 自定义关键词应出现在 title 和 text 中，以通过钉钉安全校验
+    assert "【日报】" in title
+    assert "【日报】" in text
 
 
 @patch("briefing.push.dingtalk.requests.post")
