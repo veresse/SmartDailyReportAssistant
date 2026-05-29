@@ -41,7 +41,7 @@
       <!-- 🧠 晨报精选区域 -->
       <template v-if="briefing && briefing.status === 'completed'">
         <!-- Mindmap -->
-        <section v-if="briefing.mindmap_mermaid" class="mindmap-section card">
+        <section v-if="briefing.mindmap_mermaid" class="mindmap-section editorial-block">
           <h2 class="section-title">技术演进网络</h2>
           <div ref="mermaidContainer" class="mermaid-container"></div>
         </section>
@@ -57,7 +57,7 @@
               :id="newsAnchorId(item)"
               :class="[
                 'news-card',
-                'card',
+                'editorial-news-item',
                 { 'news-card--highlighted': highlightedNewsId === item.id },
                 { 'news-card--dimmed': item.category?.includes('[重复已阅]') }
               ]"
@@ -125,7 +125,7 @@
             :href="item.url"
             target="_blank"
             rel="noopener"
-            class="feed-card card"
+            class="feed-card editorial-news-item"
           >
             <div class="feed-score-wrapper">
               <span class="feed-score" :class="scoreClass(item.score)">{{ item.score }}</span>
@@ -558,9 +558,14 @@ watch(
 }
 
 .section-title {
-  font-size: 1.3rem;
-  font-weight: 700;
-  margin-bottom: 1.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 1rem;
+  margin-bottom: 2rem;
 }
 
 .mermaid-container {
@@ -595,14 +600,20 @@ watch(
   gap: 1rem;
 }
 
-.news-card {
-  padding: 1.5rem;
+.editorial-news-item {
+  padding: 2rem 0;
   scroll-margin-top: 84px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editorial-news-item:last-child {
+  border-bottom: none;
 }
 
 .news-card--highlighted {
-  border-color: var(--color-accent-cyan);
-  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.45), var(--shadow-glow);
+  border-left: 3px solid var(--color-accent-cyan);
+  padding-left: 1.5rem;
+  background: rgba(6, 182, 212, 0.03);
 }
 
 .news-card--dimmed {
@@ -683,10 +694,11 @@ watch(
 }
 
 .news-title {
-  font-size: 1.1rem;
+  font-size: 1.4rem;
   font-weight: 700;
-  margin-bottom: 0.5rem;
-  line-height: 1.4;
+  margin-bottom: 0.75rem;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 
 .news-summary {
@@ -785,16 +797,20 @@ watch(
 
 .feed-card {
   display: flex;
-  align-items: center;
-  padding: 1rem;
-  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.5rem 0;
+  gap: 1.5rem;
   color: inherit;
-  transition: all var(--transition-fast);
+  border-bottom: 1px solid var(--color-border);
+  transition: opacity var(--transition-fast);
+}
+
+.feed-card:last-child {
+  border-bottom: none;
 }
 
 .feed-card:hover {
-  transform: translateX(4px);
-  border-color: var(--color-border-hover);
+  opacity: 0.7;
 }
 
 .feed-score-wrapper {

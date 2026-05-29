@@ -1,4 +1,7 @@
-"""结构化摘要生成模块。
+"""@deprecated 摘要生成模块。
+
+注意：自 V0.4 起，本模块已被废弃。相关逻辑已迁移至 `briefing/graph/nodes.py` 的 Analyzer Node 中，
+Prompt 已提取为 `prompts/summarizer.txt`。
 
 将每条新闻转化为「一句话结论 + 3个核心要点 + 为什么重要」的标准结构。
 """

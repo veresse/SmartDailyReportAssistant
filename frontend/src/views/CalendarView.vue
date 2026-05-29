@@ -1,85 +1,90 @@
 <template>
-  <div class="calendar-view container">
-    <!-- Hero Section -->
-    <section class="hero">
-      <h1 class="hero-title">
-        <span class="text-gradient">专属资讯助理</span>
-      </h1>
-      <p class="hero-subtitle">
-        基于您的画像，每日深度解析前沿技术资讯
-      </p>
-    </section>
+  <div class="calendar-view split-layout container">
+    <div class="split-left">
+      <!-- Hero Section -->
+      <section class="hero editorial-hero" style="margin-bottom: 4rem; padding-top: 4rem;">
+        <h1 class="editorial-title">
+          Intelligence<br>Briefing.
+        </h1>
+        <p class="editorial-subtitle">
+          基于您的画像，每日深度解析前沿技术资讯，排除噪音。
+        </p>
+      </section>
+
+      <!-- Recent Briefings -->
+      <section class="recent-section">
+        <h2 class="editorial-section-title">Latest Reports</h2>
+        <div v-if="loading" class="loading-grid">
+          <div v-for="n in 3" :key="n" class="card skeleton-card">
+            <div class="skeleton skeleton-title"></div>
+            <div class="skeleton skeleton-text" style="width: 80%"></div>
+            <div class="skeleton skeleton-text" style="width: 50%"></div>
+          </div>
+        </div>
+        <div v-else-if="recentBriefings.length === 0" class="empty-state">
+          <p class="text-muted">暂无早报数据。点击右上角「手动生成今日早报」开始使用。</p>
+        </div>
+        <div v-else class="briefing-list">
+          <router-link
+            v-for="b in recentBriefings"
+            :key="b.id"
+            :to="`/briefing/${b.date}`"
+            class="briefing-card card"
+          >
+            <div class="briefing-card-header">
+              <span class="briefing-date">{{ b.date }}</span>
+              <span :class="['tag', statusTagClass(b.status)]">{{ statusText(b.status) }}</span>
+            </div>
+            <p class="briefing-overview">{{ b.summary_overview }}</p>
+            <div class="briefing-meta">
+              <span class="text-muted">{{ b.item_count }} 条新闻</span>
+            </div>
+          </router-link>
+        </div>
+      </section>
+    </div>
 
     <!-- Calendar Navigation -->
-    <section class="calendar-section">
-      <div class="calendar-header">
-        <button class="btn btn-ghost btn-sm" @click="prevMonth">← 上月</button>
-        <h2 class="calendar-month-label">{{ monthLabel }}</h2>
-        <button class="btn btn-ghost btn-sm" @click="nextMonth">下月 →</button>
-      </div>
+    <div class="split-right sticky-sidebar" style="padding-top: 4rem;">
+      <section class="calendar-section">
+        <h2 class="editorial-section-title">Activity</h2>
+        <div class="calendar-header">
+          <button class="btn btn-ghost btn-sm" @click="prevMonth">← 上月</button>
+          <h2 class="calendar-month-label">{{ monthLabel }}</h2>
+          <button class="btn btn-ghost btn-sm" @click="nextMonth">下月 →</button>
+        </div>
 
-      <div class="calendar-grid">
-        <div v-for="day in weekdays" :key="day" class="calendar-weekday">
-          {{ day }}
-        </div>
-        <div
-          v-for="(cell, i) in calendarCells"
-          :key="i"
-          :class="[
-            'calendar-cell',
-            {
-              'calendar-cell--empty': !cell.date,
-              'calendar-cell--today': cell.isToday,
-              'calendar-cell--has-data': cell.hasData,
-              'calendar-cell--has-briefing': cell.status === 'completed',
-              'calendar-cell--processing': cell.status === 'processing' || cell.status === 'collecting',
-              'calendar-cell--failed': cell.status === 'failed',
-            },
-          ]"
-          @click="cell.hasData && goToBriefing(cell.dateStr)"
-        >
-          <span v-if="cell.date" class="calendar-day">{{ cell.date }}</span>
-          <div v-if="cell.hasData" class="calendar-indicators">
-            <div v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done" title="早报已生成"></div>
-            <div v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing" title="早报生成中"></div>
-            <div v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed" title="早报生成失败"></div>
-            <span class="feed-count-badge" v-if="cell.feedCount > 0" title="今日资讯数量">{{ cell.feedCount }}</span>
+        <div class="calendar-grid">
+          <div v-for="day in weekdays" :key="day" class="calendar-weekday">
+            {{ day }}
+          </div>
+          <div
+            v-for="(cell, i) in calendarCells"
+            :key="i"
+            :class="[
+              'calendar-cell',
+              {
+                'calendar-cell--empty': !cell.date,
+                'calendar-cell--today': cell.isToday,
+                'calendar-cell--has-data': cell.hasData,
+                'calendar-cell--has-briefing': cell.status === 'completed',
+                'calendar-cell--processing': cell.status === 'processing' || cell.status === 'collecting',
+                'calendar-cell--failed': cell.status === 'failed',
+              },
+            ]"
+            @click="cell.hasData && goToBriefing(cell.dateStr)"
+          >
+            <span v-if="cell.date" class="calendar-day">{{ cell.date }}</span>
+            <div v-if="cell.hasData" class="calendar-indicators">
+              <div v-if="cell.status === 'completed'" class="calendar-dot calendar-dot--done" title="早报已生成"></div>
+              <div v-else-if="cell.status === 'processing' || cell.status === 'collecting'" class="calendar-dot calendar-dot--processing" title="早报生成中"></div>
+              <div v-else-if="cell.status === 'failed'" class="calendar-dot calendar-dot--failed" title="早报生成失败"></div>
+              <span class="feed-count-badge" v-if="cell.feedCount > 0" title="今日资讯数量">{{ cell.feedCount }}</span>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
-
-    <!-- Recent Briefings -->
-    <section class="recent-section">
-      <h2 class="section-title">近期报告</h2>
-      <div v-if="loading" class="loading-grid">
-        <div v-for="n in 3" :key="n" class="card skeleton-card">
-          <div class="skeleton skeleton-title"></div>
-          <div class="skeleton skeleton-text" style="width: 80%"></div>
-          <div class="skeleton skeleton-text" style="width: 50%"></div>
-        </div>
-      </div>
-      <div v-else-if="recentBriefings.length === 0" class="empty-state">
-        <p class="text-muted">暂无早报数据。点击右上角「手动生成今日早报」开始使用。</p>
-      </div>
-      <div v-else class="briefing-list">
-        <router-link
-          v-for="b in recentBriefings"
-          :key="b.id"
-          :to="`/briefing/${b.date}`"
-          class="briefing-card card"
-        >
-          <div class="briefing-card-header">
-            <span class="briefing-date">{{ b.date }}</span>
-            <span :class="['tag', statusTagClass(b.status)]">{{ statusText(b.status) }}</span>
-          </div>
-          <p class="briefing-overview">{{ b.summary_overview }}</p>
-          <div class="briefing-meta">
-            <span class="text-muted">{{ b.item_count }} 条新闻</span>
-          </div>
-        </router-link>
-      </div>
-    </section>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -204,27 +209,21 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* Hero */
-.hero {
-  text-align: center;
-  padding: 3rem 0 2rem;
+.editorial-hero {
+  text-align: left;
 }
 
-.hero-title {
-  font-size: 2.5rem;
-  font-weight: 800;
-  margin-bottom: 0.75rem;
-  letter-spacing: -0.02em;
-}
-
-.hero-subtitle {
-  font-size: 1.05rem;
-  color: var(--color-text-secondary);
+.split-wrapper {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 4rem;
+  align-items: start;
 }
 
 /* Calendar */
 .calendar-section {
-  margin: 2rem 0;
+  background: transparent;
+  margin: 0;
 }
 
 .calendar-header {
@@ -260,14 +259,14 @@ onMounted(async () => {
 
 .calendar-cell {
   aspect-ratio: 1;
+  border-radius: 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
   position: relative;
   transition: all var(--transition-fast);
+  background: rgba(255,255,255,0.02);
   font-size: 0.9rem;
   gap: 2px;
 }
@@ -277,8 +276,7 @@ onMounted(async () => {
 }
 
 .calendar-cell--today {
-  border-color: var(--color-accent-indigo);
-  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid var(--color-accent-indigo);
 }
 
 .calendar-cell--has-data {
@@ -287,7 +285,7 @@ onMounted(async () => {
 }
 
 .calendar-cell--has-data:hover {
-  border-color: var(--color-accent-indigo);
+  background: rgba(255,255,255,0.05);
   transform: scale(1.05);
 }
 
@@ -356,7 +354,7 @@ onMounted(async () => {
 
 /* Recent Section */
 .recent-section {
-  margin: 3rem 0;
+  margin-bottom: 4rem;
 }
 
 .section-title {
@@ -365,9 +363,11 @@ onMounted(async () => {
   margin-bottom: 1.5rem;
 }
 
-.loading-grid {
-  display: grid;
-  gap: 1rem;
+.loading-grid,
+.briefing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
 }
 
 .skeleton-card {
@@ -380,15 +380,24 @@ onMounted(async () => {
   padding: 3rem 1rem;
 }
 
-.briefing-list {
-  display: grid;
-  gap: 1rem;
-}
-
 .briefing-card {
   display: block;
-  padding: 1.25rem 1.5rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  border-left: 2px solid transparent;
+  padding-left: 1.5rem;
+  transition: border-color var(--transition-normal);
   color: var(--color-text-primary);
+}
+
+.briefing-card:hover {
+  background: transparent;
+  border-color: var(--color-accent-indigo);
+  transform: none;
+  box-shadow: none;
 }
 
 .briefing-card-header {

@@ -11,27 +11,7 @@ from briefing.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_PERSONALIZED_SCORING_PROMPT = """你是一个专属于我的私人 AI 技术助理。请根据我的【个人画像与偏好】，评估以下新闻对我的实际阅读价值。
-
-## 👨‍💻 我的个人画像
-{user_persona}
-
-## 📰 新闻信息
-- 来源：{source}
-- 标题：{title}
-- 摘要：{description}
-
-## 📊 任务规则
-1. 价值评估 (0-100分)：严格匹配我的画像。精准踩中痛点给 85 分以上；非关注领域或公关水文绝不超过 59 分。
-2. 实体提取：提取 1-3 个核心专有名词作为标签。
-
-请仅返回 JSON 格式：
-{{
-    "analysis": "评估理由",
-    "score": 85,
-    "ai_tags": ["标签1", "标签2"]
-}}
-"""
+from briefing.ai.prompt_loader import load_prompt
 
 
 def score_single_news(item: RawNewsItemSchema) -> RawNewsItemSchema:
@@ -49,7 +29,8 @@ def score_single_news(item: RawNewsItemSchema) -> RawNewsItemSchema:
     
     settings = get_settings()
     
-    prompt = _PERSONALIZED_SCORING_PROMPT.format(
+    prompt_template = load_prompt("scorer.txt")
+    prompt = prompt_template.format(
         user_persona=settings.user_persona,
         source=item.source,
         title=item.title,

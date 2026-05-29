@@ -44,19 +44,46 @@ class Settings(BaseSettings):
         default=45, description="Loop B 注入历史上下文的最大条数"
     )
     
-    # V0.3 数据清理配置
+    # V0.4 数据清理配置
     cleanup_retention_days: int = Field(
         default=7, description="数据库垃圾数据保留天数"
     )
     cleanup_hour: int = Field(default=3, description="数据清理任务执行小时")
     cleanup_minute: int = Field(default=0, description="数据清理任务执行分钟")
 
+    # V0.4 Content Hydration
+    scraper_min_length: int = Field(
+        default=50,
+        description="RSS description 低于此字符数则触发全文抓取",
+    )
+    scraper_max_chars: int = Field(
+        default=1000,
+        description="Web Scraper 截取正文的最大字符数",
+    )
+
+    # V0.4 LangGraph Researcher
+    research_max_queries: int = Field(
+        default=3,
+        description="Researcher Node 允许的最大并发搜索词数",
+    )
+
+    # V0.4 Prompt 资产路径
+    prompts_dir: str = Field(
+        default="prompts",
+        description="Prompt 资产文件目录（相对于 backend 根目录）",
+    )
+
+    # V0.4 LangSmith 可观测性
+    langchain_tracing_v2: bool = Field(
+        default=False,
+        description="是否开启 LangSmith 可视化 Tracing",
+    )
+
     collect_max_items: int = Field(default=20, description="晨报最多收录的新闻条数")
 
     # 推送与打分阈值
     instant_push_threshold: int = Field(default=90, description="即时推送分数阈值")
     fetch_store_threshold: int = Field(default=60, description="入库分数阈值")
-    ddgs_trigger_threshold: int = Field(default=70, description="触发 DDGS 联网检索分数阈值")
     
     # 调度
     schedule_hour: int = Field(default=8, description="晨报调度执行小时")

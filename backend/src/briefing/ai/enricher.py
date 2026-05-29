@@ -1,4 +1,9 @@
-"""背景知识补充模块。
+"""@deprecated 背景补充模块。
+
+注意：自 V0.4 起，本模块已被废弃。
+- 联网搜索功能已迁移至 `tools/web_search.py`
+- 背景合成逻辑已迁移至 `briefing/graph/nodes.py` 的 Researcher Node 中
+- Prompt 已提取为 `prompts/enricher_*.txt`。
 
 识别新闻中的专业术语、缩写或新项目，结合联网检索结果补充背景释义。
 """
