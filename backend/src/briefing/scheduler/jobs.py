@@ -5,54 +5,135 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from sqlalchemy import text
 
-from rapidfuzz import fuzz
-from briefing.ai.scorer import score_single_news
-from briefing.collectors.rss import fetch_all_feeds
-from briefing.config import get_settings
-from briefing.tools.web_scraper import scrape_url
 from briefing.collectors.rss import fetch_all_feeds
 from briefing.config import get_settings
 from briefing.database import get_session
 from briefing.models import (
-    BriefingItem,
     BriefingStatus,
     DailyBriefing,
     RawNewsItem,
 )
-from briefing.push.dingtalk import send_mindmap_to_dingtalk
+from briefing.tools.web_scraper import scrape_url
+from briefing.tools.text_cleaner import clean_raw_content, extract_feature_text
+from briefing.tools.embedding import get_embedding
+from briefing.tools.dedup_engine import check_duplicate, llm_dedup_review
+from briefing.tools.web_search import web_search
+from briefing.ai.client import chat_completion_json
+from briefing.ai.prompt_loader import load_prompt
+from briefing.push.push_throttle import should_push, record_push
 
 logger = logging.getLogger(__name__)
 
 
 def _bounded_workers(requested: int, total: int) -> int:
-    """根据任务总数限制线程数。"""
     return min(max(1, requested), total or 1)
 
 
-def _is_title_duplicate(new_title: str, existing_titles: list[str], threshold: float) -> bool:
-    """判断新标题是否与已有标题过度相似。"""
-    target = int(threshold * 100)
-    for existing in existing_titles:
-        if fuzz.ratio(new_title, existing) >= target:
-            return True
-    return False
+def process_single_item(item):
+    """Loop A 处理单条新闻的完整流水线。"""
+    settings = get_settings()
+    
+    # 1. 粗洗与按需补水
+    raw_text = f"{item.title}\n{item.description}\n{item.raw_content}"
+    cleaned = clean_raw_content(raw_text, settings.scraper_max_chars)
+    
+    if len(cleaned) < settings.scraper_min_length:
+        logger.debug("内容过短，尝试全文抓取: %s", item.url)
+        full_text = scrape_url(item.url)
+        if full_text:
+            cleaned = clean_raw_content(f"{item.title}\n{full_text}", settings.scraper_max_chars)
+            
+    if len(cleaned) < 50:
+        return None  # 抓取失败或仍太短
+        
+    feature_text = extract_feature_text(cleaned)
+    
+    # 2. Embedding 向量化
+    embedding = get_embedding(feature_text)
+    if not embedding:
+        return None
+        
+    # 3. 双轨前置去重
+    dup_status = check_duplicate(feature_text, embedding)
+    if dup_status == "reject":
+        logger.info("去重拦截 (直接丢弃): %s", item.title)
+        return None
+    elif isinstance(dup_status, tuple) and dup_status[0] == "review":
+        similar_text = dup_status[1]
+        is_dup = llm_dedup_review(feature_text, similar_text)
+        if is_dup:
+            logger.info("去重拦截 (LLM裁决为重复): %s", item.title)
+            return None
+            
+    # 4. 诊断预判
+    diag_prompt_tmpl = load_prompt("diagnostor.txt")
+    diag_prompt = diag_prompt_tmpl.format(feature_text=feature_text)
+    try:
+        diag_res = chat_completion_json(diag_prompt, temperature=0.1)
+    except Exception as e:
+        logger.error("诊断预判失败: %s", e)
+        return None
+        
+    # 5. 按需 RAG 搜索
+    rag_context = "无补充背景"
+    if diag_res.get("needs_background_check") and diag_res.get("search_query"):
+        query = diag_res["search_query"]
+        logger.info("触发 RAG 搜索: %s", query)
+        search_res = web_search(query)
+        if search_res:
+            rag_context = "\n".join(f"- {r['title']}: {r['snippet']}" for r in search_res)
+            
+    # 6. 信息融合与终审打分
+    persona = load_prompt("persona.txt")
+    extractor_tmpl = load_prompt("slot_extractor.txt")
+    extractor_prompt = extractor_tmpl.format(
+        user_persona=persona,
+        cleaned_text=cleaned,
+        rag_context=rag_context,
+        event_category=diag_res.get("event_category", "其他"),
+        key_entities=", ".join(diag_res.get("key_entities", [])),
+    )
+    
+    try:
+        slot_json = chat_completion_json(extractor_prompt, temperature=0.2)
+    except Exception as e:
+        logger.error("槽位提取失败: %s", e)
+        return None
+        
+    # 7. 计算双维分数
+    scoring = slot_json.get("scoring_alignment", {})
+    tech = scoring.get("tech_utility_score", 0)
+    macro = scoring.get("macro_impact_score", 0)
+    final_score = int(tech * 0.6 + macro * 0.4)
+    
+    return {
+        "item": item,
+        "cleaned_text": cleaned,
+        "feature_text": feature_text,
+        "embedding": embedding,
+        "slot_json": slot_json,
+        "tech_utility_score": tech,
+        "macro_impact_score": macro,
+        "scoring_rationale": scoring.get("scoring_rationale", ""),
+        "final_score": final_score
+    }
 
 
 def fetch_and_instant_push():
     """Loop A: 高频抓取与即时推送。"""
-    logger.info("开始执行 Loop A: 高频 RSS 抓取与即时推送...")
+    logger.info("开始执行 Loop A: 高频 RSS 抓取与深度定性管线...")
     settings = get_settings()
     session = get_session()
 
     try:
-        # 1. 并发抓取所有 RSS 源
         raw_items = fetch_all_feeds()
         if not raw_items:
             logger.info("Loop A 完成：无新数据")
             return
 
-        # 2. 基于 URL 简单去重 (过滤掉数据库已有的)
+        # 简单 URL 去重
         recent_cutoff = datetime.now(timezone.utc) - timedelta(days=2)
         existing_urls = {
             url[0] for url in session.query(RawNewsItem.url).filter(
@@ -60,74 +141,51 @@ def fetch_and_instant_push():
             ).all()
         }
         
-        # 获取过去 24 小时内 score >= 60 的标题，用于标题查重
-        title_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-        recent_titles = [
-            t[0] for t in session.query(RawNewsItem.title).filter(
-                RawNewsItem.collected_at >= title_cutoff,
-                RawNewsItem.score >= settings.fetch_store_threshold
-            ).all()
-        ]
-        
-        new_items = []
-        for item in raw_items:
-            if item.url not in existing_urls:
-                if not _is_title_duplicate(item.title, recent_titles, settings.title_similarity_threshold):
-                    new_items.append(item)
-                    existing_urls.add(item.url)
-                    recent_titles.append(item.title)
-                else:
-                    logger.info("标题过于相似，丢弃: %s", item.title)
-                
+        new_items = [i for i in raw_items if i.url not in existing_urls]
         if not new_items:
             logger.info("Loop A 完成：抓取的数据已在数据库中存在")
             return
 
-        # 3. Content Hydration 按需补水
-        hydrated_items = []
-        for item in new_items:
-            if len(item.description.strip()) < settings.scraper_min_length:
-                logger.info("摘要过短 (%d 字符)，触发补水: %s", len(item.description), item.title[:40])
-                full_text = scrape_url(item.url)
-                if full_text:
-                    # 原地更新 Pydantic 模型（这里使用 model_copy 因为是不可变模型更好，或者直接修改如果支持）
-                    # Pydantic v2 可以直接用 model_copy 
-                    item = item.model_copy(update={"description": full_text})
-            hydrated_items.append(item)
-
-        # 4. 并发打分
-        logger.info("开始为 %d 条新数据进行 AI 打分", len(hydrated_items))
-        scored_items = []
-        with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(hydrated_items))) as executor:
-            future_to_item = {executor.submit(score_single_news, item): item for item in hydrated_items}
+        logger.info("开始处理 %d 条新数据...", len(new_items))
+        processed_results = []
+        with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(new_items))) as executor:
+            future_to_item = {executor.submit(process_single_item, item): item for item in new_items}
             for future in as_completed(future_to_item):
-                try:
-                    scored_items.append(future.result())
-                except Exception as e:
-                    logger.error("打分异常: %s", e)
+                res = future.result()
+                if res:
+                    processed_results.append(res)
 
-        # 4. 筛选入库与即时推送
         to_insert = []
-        for item in scored_items:
-            if item.score >= settings.fetch_store_threshold:
+        pushed_items = []
+        for res in processed_results:
+            if res["final_score"] >= settings.fetch_store_threshold:
                 db_item = RawNewsItem(
-                    source=item.source,
-                    title=item.title,
-                    url=item.url,
-                    description=item.description,
-                    raw_content=item.raw_content,
-                    score=item.score,
-                    extra_data=json.dumps(item.extra_data, ensure_ascii=False),
-                    ai_tags=json.dumps(getattr(item, "ai_tags", []), ensure_ascii=False),
-                    published_at=item.published_at,
+                    source=res["item"].source,
+                    title=res["item"].title,
+                    url=res["item"].url,
+                    cleaned_text=res["cleaned_text"],
+                    feature_text=res["feature_text"],
+                    score=res["final_score"],
+                    slot_json=json.dumps(res["slot_json"], ensure_ascii=False),
+                    tech_utility_score=res["tech_utility_score"],
+                    macro_impact_score=res["macro_impact_score"],
+                    scoring_rationale=res["scoring_rationale"],
+                    embedding_vector=json.dumps(res["embedding"]),
+                    published_at=res["item"].published_at,
                     briefing_date=datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d"),
                 )
                 
-                # 即时推送判断
-                if item.score >= settings.instant_push_threshold:
-                    _send_instant_push(item)
-                    db_item.is_pushed_instantly = True
-                    
+                # 防抖与即时推送判断
+                if res["final_score"] >= settings.instant_push_threshold:
+                    tags = res["slot_json"].get("meta_routing", {}).get("key_entities", [])
+                    if should_push(tags):
+                        _send_instant_push(res)
+                        record_push(tags)
+                        db_item.is_pushed_instantly = True
+                    else:
+                        logger.info("防抖熔断，稍后可能合并推送: %s", res["item"].title)
+                        pushed_items.append(res)
+                        
                 to_insert.append(db_item)
 
         if to_insert:
@@ -138,6 +196,10 @@ def fetch_and_instant_push():
         else:
             logger.info("Loop A 完成：无满足分数门槛的数据入库")
 
+        # 合并推送 (如果被熔断的很多)
+        if len(pushed_items) >= settings.push_throttle_max:
+            _send_merged_push(pushed_items)
+
     except Exception as e:
         session.rollback()
         logger.error("Loop A 异常: %s", e)
@@ -145,7 +207,7 @@ def fetch_and_instant_push():
         session.close()
 
 
-def _send_instant_push(item):
+def _send_instant_push(res: dict):
     """发送即时快讯到钉钉。"""
     settings = get_settings()
     if not settings.dingtalk_webhook_url:
@@ -155,7 +217,7 @@ def _send_instant_push(item):
     from briefing.push.dingtalk import _build_signed_webhook_url
     
     url = _build_signed_webhook_url(settings.dingtalk_webhook_url, settings.dingtalk_secret)
-    score_reason = item.extra_data.get("score_reason", "")
+    item = res["item"]
     keyword = settings.dingtalk_keyword
     
     payload = {
@@ -163,10 +225,10 @@ def _send_instant_push(item):
         "markdown": {
             "title": f"{keyword} ⚡ AI 突发快讯：{item.title}",
             "text": (
-                f"### {keyword} ⚡ AI 重磅快讯 ({item.score}分)\n\n"
+                f"### {keyword} ⚡ AI 重磅快讯 ({res['final_score']}分)\n\n"
                 f"**[{item.title}]({item.url})**\n\n"
-                f"> {item.description[:300]}...\n\n"
-                f"**上榜理由**：{score_reason}\n\n"
+                f"> {res['slot_json'].get('core_facts', {}).get('one_sentence_summary', item.title)}\n\n"
+                f"**上榜理由**：{res['scoring_rationale']}\n\n"
                 f"*{item.source}*"
             )
         }
@@ -174,9 +236,42 @@ def _send_instant_push(item):
     
     try:
         requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
-        logger.info("已发送即时快讯: %s", item.title)
     except Exception as e:
         logger.error("即时快讯发送失败: %s", e)
+
+
+def _send_merged_push(items: list[dict]):
+    """发送合并突发事件推送。"""
+    settings = get_settings()
+    if not settings.dingtalk_webhook_url:
+        return
+        
+    import requests
+    from briefing.push.dingtalk import _build_signed_webhook_url
+    
+    url = _build_signed_webhook_url(settings.dingtalk_webhook_url, settings.dingtalk_secret)
+    keyword = settings.dingtalk_keyword
+    
+    titles = "\n".join(f"- {res['item'].title}" for res in items[:5])
+    if len(items) > 5:
+        titles += f"\n- ...等 {len(items)} 条相关资讯"
+        
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": f"{keyword} 🔄 突发事件多源追踪合集",
+            "text": (
+                f"### {keyword} 🔄 突发事件多源追踪合集\n\n"
+                f"系统检测到近期有多篇高分相关资讯，已触发合并推送：\n\n"
+                f"{titles}\n\n"
+                f"请前往系统查看详细聚合早报。"
+            )
+        }
+    }
+    try:
+        requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
+    except Exception as e:
+        logger.error("合并推送发送失败: %s", e)
 
 
 def generate_daily_briefing(date_str: str | None = None) -> int | None:
@@ -186,7 +281,6 @@ def generate_daily_briefing(date_str: str | None = None) -> int | None:
 
 
 def mark_interrupted_briefings_failed() -> int:
-    """将上次进程中断遗留的运行中早报标记为失败。"""
     session = get_session()
     try:
         interrupted = session.query(DailyBriefing).filter(
@@ -199,7 +293,6 @@ def mark_interrupted_briefings_failed() -> int:
         return count
     except Exception as e:
         session.rollback()
-        logger.error("恢复中断状态异常: %s", e)
         return 0
     finally:
         session.close()
@@ -207,15 +300,23 @@ def mark_interrupted_briefings_failed() -> int:
 
 def cleanup_memory():
     """Loop C: 数据库清理。"""
-    logger.info("开始清理过期数据...")
+    logger.info("开始清理过期数据与磁盘碎片...")
     session = get_session()
     try:
-        # 删除过期数据的 RawNewsItem
         settings = get_settings()
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_retention_days)
+        
+        # 1. 清理过期 RawNewsItem
         deleted = session.query(RawNewsItem).filter(RawNewsItem.collected_at < cutoff).delete()
         session.commit()
         logger.info("已清理 %d 条过期原始新闻数据", deleted)
+        
+        # 2. 定期 VACUUM（每周一执行）
+        if datetime.now().weekday() == 0:
+            session.execute(text("VACUUM"))
+            session.commit()
+            logger.info("已执行 VACUUM，释放 SQLite 磁盘碎片")
+            
     except Exception as e:
         session.rollback()
         logger.error("数据清理异常: %s", e)

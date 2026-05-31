@@ -27,6 +27,8 @@ class RawNewsItemResponse(BaseModel):
     url: str
     description: str
     score: int
+    tech_utility_score: int = 0
+    macro_impact_score: int = 0
     published_at: str
     collected_at: datetime
     is_pushed_instantly: bool
@@ -53,9 +55,9 @@ class BriefingDetailResponse(BaseModel):
     id: int
     date: str
     status: str
+    full_markdown: str
     mindmap_mermaid: str
-    summary_overview: str
-    items: list[BriefingItemResponse]
+    retry_count: int
 
 
 class BriefingListItem(BaseModel):
@@ -115,8 +117,8 @@ def list_briefings(
             id=b.id,
             date=b.date,
             status=b.status.value,
-            summary_overview=b.summary_overview,
-            item_count=len(b.items),
+            summary_overview=b.full_markdown[:100] + "..." if b.full_markdown else "生成中...",
+            item_count=0,
         )
         for b in briefings
     ]
@@ -134,29 +136,13 @@ def get_briefing(date: str, db: Session = Depends(_get_db)):
     if not briefing:
         return None
 
-    items = [
-        BriefingItemResponse(
-            id=item.id,
-            source=item.source,
-            title=item.title,
-            url=item.url,
-            one_line_summary=item.one_line_summary,
-            key_points=json.loads(item.key_points) if item.key_points else [],
-            importance=item.importance,
-            background=item.background,
-            category=item.category,
-            priority=item.priority,
-        )
-        for item in briefing.items
-    ]
-
     return BriefingDetailResponse(
         id=briefing.id,
         date=briefing.date,
         status=briefing.status.value,
+        full_markdown=briefing.full_markdown,
         mindmap_mermaid=briefing.mindmap_mermaid,
-        summary_overview=briefing.summary_overview,
-        items=items,
+        retry_count=briefing.retry_count,
     )
 
 

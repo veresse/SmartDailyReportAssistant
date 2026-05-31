@@ -1,94 +1,95 @@
-"""LangGraph 工作流编译与执行入口。"""
+"""LangGraph 工作流组装与执行引擎。"""
 
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 from langgraph.graph import StateGraph, END
 
 from briefing.config import get_settings
-from briefing.graph.state import BriefingState
-from briefing.graph.nodes import (
-    init_node,
-    analyzer_node,
-    researcher_node,
-    aggregator_node,
-    filter_node,
-    mindmap_node,
-    publish_node,
-)
-from briefing.graph.edges import fan_out_to_analyzers, route_after_analysis
+from briefing.database import get_session
+from briefing.models import BriefingStatus, DailyBriefing
+from briefing.graph.state import BriefingGraphState
+from briefing.graph.nodes import aggregator_node, filler_node, validator_node, publisher_node
+from briefing.graph.edges import route_after_validation
 
 logger = logging.getLogger(__name__)
 
 
-def build_briefing_graph() -> StateGraph:
-    """构建并编译 Loop B 的 LangGraph 工作流。"""
-    graph = StateGraph(BriefingState)
+def build_briefing_graph():
+    """组装 V0.5 早报生成图。"""
+    graph = StateGraph(BriefingGraphState)
 
-    # 注册节点
-    graph.add_node("init", init_node)
-    graph.add_node("analyzer", analyzer_node)
-    graph.add_node("researcher", researcher_node)
     graph.add_node("aggregator", aggregator_node)
-    graph.add_node("filter", filter_node)
-    graph.add_node("mindmap", mindmap_node)
-    graph.add_node("publish", publish_node)
+    graph.add_node("filler", filler_node)
+    graph.add_node("validator", validator_node)
+    graph.add_node("publisher", publisher_node)
 
-    # 构建边
-    graph.set_entry_point("init")
-    graph.add_conditional_edges("init", fan_out_to_analyzers)
-    
-    # Send 分支内部路由
-    graph.add_conditional_edges("analyzer", route_after_analysis, {
-        "researcher": "researcher",
-        "aggregator": "aggregator",
+    graph.set_entry_point("aggregator")
+    graph.add_edge("aggregator", "filler")
+    graph.add_edge("filler", "validator")
+    graph.add_conditional_edges("validator", route_after_validation, {
+        "filler": "filler",
+        "publisher": "publisher",
     })
-    
-    graph.add_edge("researcher", "filter")
-    graph.add_edge("aggregator", "filter")
-    graph.add_edge("filter", "mindmap")
-    graph.add_edge("mindmap", "publish")
-    graph.add_edge("publish", END)
+    graph.add_edge("publisher", END)
 
     return graph.compile()
 
 
 def run_briefing_graph(date_str: str | None = None) -> int | None:
-    """执行 Loop B 工作流，供 jobs.py 调用。
-
-    Args:
-        date_str: 目标日期，默认为今天
-
-    Returns:
-        DailyBriefing.id 或 None
-    """
+    """执行 V0.5 早报生成流。"""
     settings = get_settings()
     if not date_str:
         date_str = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d")
 
-    graph = build_briefing_graph()
-    initial_state: BriefingState = {
+    session = get_session()
+    try:
+        # 创建或重置 DailyBriefing 记录
+        briefing = session.query(DailyBriefing).filter_by(date=date_str).first()
+        if not briefing:
+            briefing = DailyBriefing(date=date_str, status=BriefingStatus.PROCESSING)
+            session.add(briefing)
+        else:
+            briefing.status = BriefingStatus.PROCESSING
+            briefing.retry_count = 0
+            briefing.full_markdown = ""
+            briefing.mindmap_mermaid = ""
+        session.commit()
+        briefing_id = briefing.id
+    except Exception as e:
+        session.rollback()
+        logger.error("初始化早报记录失败: %s", e)
+        return None
+    finally:
+        session.close()
+
+    initial_state = {
         "date_str": date_str,
-        "raw_news": [],
-        "processed_items": [],
-        "historical_memory": "",
-        "mindmap": "",
-        "summary_overview": "",
+        "briefing_id": briefing_id,
+        "max_retries": 3,
+        "retry_count": 0,
         "status": "init",
-        "briefing_id": 0,
-        "current_item": {},
-        "current_analyzed_item": {
-            "title": "", "source": "", "url": "", "description": "",
-            "raw_content": "", "score": 0, "ai_tags": [], "one_line_summary": "",
-            "key_points": [], "importance": "", "category": "", "needs_research": False,
-            "search_keywords": [], "background": ""
-        },
+        "slot_data_by_category": {},
+        "briefing_template": "",
+        "filled_markdown": "",
+        "mindmap_code": "",
+        "validation_result": {}
     }
 
     try:
-        final_state = graph.invoke(initial_state)
-        return final_state.get("briefing_id")
+        app = build_briefing_graph()
+        final_state = app.invoke(initial_state)
+        return briefing_id
     except Exception as e:
-        logger.error("LangGraph 工作流执行异常: %s", e)
+        logger.error("执行早报生成流失败: %s", e)
+        session = get_session()
+        try:
+            b = session.query(DailyBriefing).get(briefing_id)
+            if b:
+                b.status = BriefingStatus.FAILED
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            session.close()
         return None

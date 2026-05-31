@@ -30,8 +30,9 @@ def score_single_news(item: RawNewsItemSchema) -> RawNewsItemSchema:
     settings = get_settings()
     
     prompt_template = load_prompt("scorer.txt")
+    user_persona = load_prompt("persona.txt").strip()
     prompt = prompt_template.format(
-        user_persona=settings.user_persona,
+        user_persona=user_persona,
         source=item.source,
         title=item.title,
         description=text_to_eval[:1500]

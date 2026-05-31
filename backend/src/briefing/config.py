@@ -25,46 +25,25 @@ class Settings(BaseSettings):
     rss_fetch_interval_minutes: int = Field(default=30, description="RSS 抓取间隔分钟")
     rss_lookback_minutes: int = Field(default=120, description="RSS 抓取回溯窗口（分钟）")
     llm_concurrency: int = Field(default=5, description="LLM 处理并发数")
-    # V0.3 个性化配置
-    user_persona: str = Field(
-        default="我是一名关注 AI 发展的技术人员，偏好开源项目和硬核技术解析，不看软文。",
-        description="注入给 LLM 的私人画像描述",
-    )
-    
-    # V0.3 去重配置
-    title_similarity_threshold: float = Field(
-        default=0.85, description="Loop A 标题相似度硬拦截阈值"
-    )
-    
-    # V0.3 上下文配置
-    context_lookback_days: int = Field(
-        default=3, description="Loop B 向前追溯历史脉络的天数"
-    )
-    context_max_items: int = Field(
-        default=45, description="Loop B 注入历史上下文的最大条数"
-    )
-    
-    # V0.4 数据清理配置
-    cleanup_retention_days: int = Field(
-        default=7, description="数据库垃圾数据保留天数"
-    )
-    cleanup_hour: int = Field(default=3, description="数据清理任务执行小时")
-    cleanup_minute: int = Field(default=0, description="数据清理任务执行分钟")
 
-    # V0.4 Content Hydration
+    
+    # V0.5 Embedding
+    embedding_model: str = Field(default="text-embedding-3-small", description="Embedding 模型名称")
+
+    # V0.5 去重与防抖
+    dedup_pass_threshold: float = Field(default=0.80, description="向量去重放行阈值")
+    dedup_reject_threshold: float = Field(default=0.95, description="向量去重丢弃阈值")
+    push_throttle_window: int = Field(default=1800, description="防抖窗口秒数")
+    push_throttle_max: int = Field(default=3, description="窗口内最大推送次数")
+
+    # V0.4 Content Hydration (部分沿用)
     scraper_min_length: int = Field(
         default=50,
         description="RSS description 低于此字符数则触发全文抓取",
     )
     scraper_max_chars: int = Field(
-        default=1000,
+        default=5000,
         description="Web Scraper 截取正文的最大字符数",
-    )
-
-    # V0.4 LangGraph Researcher
-    research_max_queries: int = Field(
-        default=3,
-        description="Researcher Node 允许的最大并发搜索词数",
     )
 
     # V0.4 Prompt 资产路径

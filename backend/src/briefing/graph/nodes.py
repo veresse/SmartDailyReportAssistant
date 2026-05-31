@@ -1,311 +1,181 @@
-"""LangGraph 图节点实现。"""
+"""LangGraph 节点实现。"""
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from briefing.ai.client import chat_completion_json
-from briefing.ai.deduplicator import deduplicate
-from briefing.ai.mindmap import generate_mindmap
+from briefing.ai.client import chat_completion, chat_completion_json
 from briefing.ai.prompt_loader import load_prompt
-from briefing.collectors.base import RawNewsItemSchema
 from briefing.config import get_settings
 from briefing.database import get_session
-from briefing.graph.state import BriefingState, NewsItemState
-from briefing.models import BriefingItem, BriefingStatus, DailyBriefing, RawNewsItem
-from briefing.push.dingtalk import send_mindmap_to_dingtalk
-from briefing.tools.memory_retriever import retrieve_relevant_memory
-from briefing.tools.web_search import web_search
+from briefing.models import BriefingStatus, DailyBriefing, RawNewsItem
+from briefing.graph.state import BriefingGraphState
 
 logger = logging.getLogger(__name__)
 
 
-def init_node(state: BriefingState) -> dict:
-    """初始化节点：数据库查询 + 去重 + 精准记忆加载。"""
+def aggregator_node(state: BriefingGraphState) -> dict:
+    """聚集前一日与当日高分资讯，按分类整合。"""
     settings = get_settings()
-    date_str = state["date_str"]
     session = get_session()
-
+    
+    target_date = state.get("date_str")
     try:
-        # 1. 创建或查找当天的 DailyBriefing
-        existing = session.query(DailyBriefing).filter(DailyBriefing.date == date_str).first()
-        if existing and existing.status in (BriefingStatus.COMPLETED, BriefingStatus.PROCESSING):
-            logger.info("早报 %s 已存在或正在处理", date_str)
-            return {"status": "skipped", "briefing_id": existing.id}
-
-        if not existing:
-            existing = DailyBriefing(date=date_str, status=BriefingStatus.PROCESSING)
-            session.add(existing)
-            session.flush()
-        else:
-            existing.status = BriefingStatus.PROCESSING
-            session.query(BriefingItem).filter(BriefingItem.briefing_id == existing.id).delete()
-            session.flush()
-
-        briefing_id = existing.id
-
-        # 2. 拉取过去 48 小时的高分数据
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-        from datetime import timezone
-        db_items = session.query(RawNewsItem).filter(
-            RawNewsItem.collected_at >= cutoff,
+        dt = datetime.strptime(target_date, "%Y-%m-%d")
+        prev_date = (dt - timedelta(days=1)).strftime("%Y-%m-%d")
+    except ValueError:
+        prev_date = target_date
+        
+    try:
+        # 提取这两天的入库新闻
+        items = session.query(RawNewsItem).filter(
+            RawNewsItem.briefing_date.in_([target_date, prev_date]),
             RawNewsItem.score >= settings.fetch_store_threshold
         ).all()
-
-        if not db_items:
-            existing.status = BriefingStatus.FAILED
-            existing.summary_overview = "今日暂无足够高价值的 AI 资讯更新。"
-            session.commit()
-            return {"status": "failed", "briefing_id": briefing_id}
-
-        schema_items = [
-            RawNewsItemSchema(
-                source=i.source,
-                title=i.title,
-                url=i.url,
-                description=i.description,
-                raw_content=i.raw_content,
-                score=i.score,
-                published_at=i.published_at,
-                ai_tags=json.loads(i.ai_tags) if i.ai_tags else [],
-            ) for i in db_items
-        ]
-
-        # 3. 同日语义去重
-        deduped_items = deduplicate(schema_items)
-        deduped_items.sort(key=lambda x: x.score, reverse=True)
-        top_items = deduped_items[:settings.collect_max_items]
-
-        # 4. 提取当前所有待处理新闻的 ai_tags
-        current_tags = []
-        for item in top_items:
-            current_tags.extend(item.ai_tags)
-
-        # 5. 调用精准记忆检索
-        historical_memory = retrieve_relevant_memory(current_tags)
-
-        # 转换回字典以兼容 State
-        raw_news = [item.model_dump() for item in top_items]
-
-        session.commit()
-
+        
+        # 按分数排序，或者按 category 分组
+        slot_data_by_category = {}
+        for item in items:
+            try:
+                slot = json.loads(item.slot_json)
+                cat = slot.get("meta_routing", {}).get("event_category", "其他")
+                # 简化分类，匹配模板
+                if "Tech" in cat or "技术" in cat: cat_key = "Tech"
+                elif "OpenSource" in cat or "开源" in cat: cat_key = "OpenSource"
+                elif "Biz" in cat or "商业" in cat or "融资" in cat: cat_key = "Biz"
+                elif "HR" in cat or "人事" in cat: cat_key = "HR"
+                elif "Policy" in cat or "政策" in cat: cat_key = "Policy"
+                else: cat_key = "Tech" # 兜底
+                
+                if cat_key not in slot_data_by_category:
+                    slot_data_by_category[cat_key] = []
+                    
+                slot_data_by_category[cat_key].append({
+                    "title": item.title,
+                    "url": item.url,
+                    "score": item.score,
+                    "source": item.source,
+                    "details": slot
+                })
+            except Exception:
+                continue
+                
+        # 加载模板
+        template = load_prompt("briefing_template.md")
+        # 替换日期变量
+        template = template.replace("{date}", target_date)
+        
         return {
-            "raw_news": raw_news,
-            "historical_memory": historical_memory,
-            "briefing_id": briefing_id,
-            "status": "in_progress",
+            "slot_data_by_category": slot_data_by_category,
+            "briefing_template": template,
+            "status": "filling"
         }
-
-    except Exception as e:
-        session.rollback()
-        logger.error("Init Node 异常: %s", e)
-        return {"status": "failed"}
     finally:
         session.close()
 
 
-def analyzer_node(state: dict) -> dict:
-    """分析师节点：为单条新闻生成摘要并判断搜索意图。"""
-    item = state.get("current_item")
-    if not item:
-        return {}
-
-    prompt_template = load_prompt("summarizer.txt")
-    prompt = prompt_template.format(
-        title=item.get("title", ""),
-        source=item.get("source", ""),
-        url=item.get("url", ""),
-        description=item.get("description", "")[:500],
-        content=item.get("raw_content", "")[:3000],
-        historical_context=state.get("historical_memory", "暂无相关近期记忆。"),
+def filler_node(state: BriefingGraphState) -> dict:
+    """调用 LLM 灌装模板。"""
+    logger.info("执行 Filler 节点...")
+    
+    slot_data_json = json.dumps(state.get("slot_data_by_category", {}), ensure_ascii=False, indent=2)
+    template = state.get("briefing_template", "")
+    
+    val_res = state.get("validation_result", {})
+    feedback = val_res.get("feedback", "无") if val_res else "无"
+    
+    prompt_tmpl = load_prompt("briefing_filler.txt")
+    prompt = prompt_tmpl.format(
+        slot_data_json=slot_data_json,
+        briefing_template=template,
+        validator_feedback=feedback
     )
-
+    
     try:
-        result = chat_completion_json(prompt)
-        news_state: NewsItemState = {
-            "title": item.get("title", ""),
-            "source": item.get("source", ""),
-            "url": item.get("url", ""),
-            "description": item.get("description", ""),
-            "raw_content": item.get("raw_content", ""),
-            "score": item.get("score", 0),
-            "ai_tags": item.get("ai_tags", []),
-            "one_line_summary": result.get("one_line_summary", item.get("title", "")),
-            "key_points": result.get("key_points", [])[:3],
-            "importance": result.get("importance", ""),
-            "category": result.get("category", "其他"),
-            "needs_research": bool(result.get("needs_research", False)),
-            "search_keywords": result.get("search_keywords", []),
-            "background": "",
-        }
-        return {"current_analyzed_item": news_state}
+        filled_markdown = chat_completion(prompt, temperature=0.3)
+        # 清除可能的 markdown 包裹
+        if filled_markdown.startswith("```markdown"):
+            filled_markdown = filled_markdown[11:].strip()
+        if filled_markdown.endswith("```"):
+            filled_markdown = filled_markdown[:-3].strip()
+            
+        return {"filled_markdown": filled_markdown}
     except Exception as e:
-        logger.error("Analyzer Node 分析异常 (%s): %s", item.get("title", "")[:40], e)
-        news_state = {
-            "title": item.get("title", ""),
-            "source": item.get("source", ""),
-            "url": item.get("url", ""),
-            "description": item.get("description", ""),
-            "raw_content": item.get("raw_content", ""),
-            "score": item.get("score", 0),
-            "ai_tags": item.get("ai_tags", []),
-            "one_line_summary": item.get("title", ""),
-            "key_points": [],
-            "importance": "",
-            "category": "其他",
-            "needs_research": False,
-            "search_keywords": [],
-            "background": "",
-        }
-        return {"current_analyzed_item": news_state}
+        logger.error("Filler 失败: %s", e)
+        return {"filled_markdown": template} # 兜底返回空模板
 
 
-def researcher_node(state: dict) -> dict:
-    """研究员节点：联网搜索并润色摘要。最后写入 processed_items。"""
-    item = state.get("current_analyzed_item")
-    if not item:
-        return {}
-
-    keywords = item.get("search_keywords", [])
-    if not keywords:
-        return {"processed_items": [item]}
-
-    settings = get_settings()
-    max_queries = settings.research_max_queries
-    keywords = keywords[:max_queries]
-
-    search_results = {}
-    for kw in keywords:
-        results = web_search(kw)
-        search_results[kw] = results
-
-    lines = []
-    for term, results in search_results.items():
-        lines.append(f"### {term}")
-        if not results:
-            lines.append("- 未检索到有效结果")
-            continue
-        for res in results:
-            t = res.get("title", "").strip()
-            l = res.get("link", "").strip()
-            s = res.get("snippet", "").strip()
-            lines.append(f"- {t}\n  链接: {l}\n  摘要: {s}")
-    search_context = "\n".join(lines)
-
-    prompt_template = load_prompt("enricher_synthesis.txt")
-    prompt = prompt_template.format(
-        title=item.get("title", ""),
-        summary=item.get("one_line_summary", ""),
-        key_points="\n".join(f"- {p}" for p in item.get("key_points", [])),
-        terms="\n".join(f"- {kw}" for kw in keywords),
-        search_context=search_context,
+def validator_node(state: BriefingGraphState) -> dict:
+    """执行文档质检。"""
+    logger.info("执行 Validator 节点 (retry: %d)...", state.get("retry_count", 0))
+    
+    filled_markdown = state.get("filled_markdown", "")
+    slot_data_json = json.dumps(state.get("slot_data_by_category", {}), ensure_ascii=False)
+    
+    prompt_tmpl = load_prompt("validator.txt")
+    prompt = prompt_tmpl.format(
+        filled_markdown=filled_markdown,
+        slot_data_json=slot_data_json
     )
-
-    from briefing.ai.client import chat_completion
-    try:
-        background = chat_completion(prompt, response_format=None).strip()
-        item["background"] = background
-    except Exception as e:
-        logger.error("Researcher Node 补充背景失败: %s", e)
-        item["background"] = ""
-
-    return {"processed_items": [item]}
-
-
-def aggregator_node(state: dict) -> dict:
-    """聚合节点：如果不需要 research，直接将 item 推入 processed_items。"""
-    item = state.get("current_analyzed_item")
-    if item:
-        return {"processed_items": [item]}
-    return {}
-
-
-def filter_node(state: BriefingState) -> dict:
-    """过滤重复已阅节点。"""
-    filtered = [
-        item for item in state.get("processed_items", [])
-        if "[重复已阅]" not in item.get("category", "")
-    ]
-    return {"processed_items": filtered}
-
-
-def mindmap_node(state: BriefingState) -> dict:
-    """思维导图生成节点。"""
-    processed = state.get("processed_items", [])
-    if not processed:
-        return {"mindmap": ""}
-    
-    # 构建供给思维导图的输入
-    news_for_map = []
-    for i, item in enumerate(processed, 1):
-        news_for_map.append({
-            "index": f"N{i}",
-            "title": item.get("title", ""),
-            "summary": item.get("one_line_summary", "")
-        })
     
     try:
-        mindmap_code = generate_mindmap(news_for_map)
-        return {"mindmap": mindmap_code}
+        val_res = chat_completion_json(prompt, temperature=0.1)
     except Exception as e:
-        logger.error("思维导图生成失败: %s", e)
-        return {"mindmap": "mindmap\n  root((今日技术动态))\n    生成失败"}
-
-
-def publish_node(state: BriefingState) -> dict:
-    """持久化与推送节点。"""
-    date_str = state["date_str"]
-    briefing_id = state["briefing_id"]
-    processed = state.get("processed_items", [])
-    mindmap_code = state.get("mindmap", "")
+        logger.error("Validator 调用失败: %s", e)
+        val_res = {"is_valid": False, "errors": ["质检请求失败"], "feedback": "重试"}
+        
+    is_valid = val_res.get("is_valid", False)
     
-    if not processed:
-        logger.warning("没有可发布的资讯！")
-        return {"status": "failed"}
+    # 提取 mermaid 代码以便存为单独字段
+    mindmap_code = ""
+    mermaid_match = re.search(r'```mermaid\n(.*?)```', filled_markdown, re.DOTALL)
+    if mermaid_match:
+        mindmap_code = mermaid_match.group(1).strip()
+    elif is_valid: # 如果没报错但找不到 mermaid，也强制报错
+        is_valid = False
+        val_res["is_valid"] = False
+        val_res["feedback"] = "未能找到 ```mermaid 块，请确保正确生成了思维导图"
+        
+    return {
+        "validation_result": val_res,
+        "mindmap_code": mindmap_code,
+        "retry_count": state.get("retry_count", 0) + (1 if not is_valid else 0)
+    }
 
+
+def publisher_node(state: BriefingGraphState) -> dict:
+    """最终发布节点。"""
+    logger.info("执行 Publisher 节点...")
+    
     session = get_session()
     try:
-        existing = session.query(DailyBriefing).filter(DailyBriefing.id == briefing_id).first()
-        if not existing:
-            logger.error("未找到 DailyBriefing 记录")
+        briefing = session.query(DailyBriefing).get(state["briefing_id"])
+        if not briefing:
             return {"status": "failed"}
-
-        # 生成概述
-        overview = f"为您精选了 {len(processed)} 条最新 AI 动态。"
-        existing.summary_overview = overview
-        existing.status = BriefingStatus.COMPLETED
-
-        # 写入条目
-        for idx, p in enumerate(processed, 1):
-            bi = BriefingItem(
-                briefing_id=briefing_id,
-                title=p.get("title", ""),
-                source=p.get("source", ""),
-                url=p.get("url", ""),
-                description=p.get("description", ""),
-                ai_tags=json.dumps(p.get("ai_tags", [])),
-                one_line_summary=p.get("one_line_summary", ""),
-                key_points=json.dumps(p.get("key_points", [])),
-                importance=p.get("importance", ""),
-                category=p.get("category", ""),
-                background=p.get("background", ""),
-                priority=idx,
-            )
-            session.add(bi)
+            
+        markdown = state.get("filled_markdown", "")
+        mindmap = state.get("mindmap_code", "")
+        
+        # 如果是降级发布（即超过最大重试，仍然无效）
+        val_res = state.get("validation_result", {})
+        if not val_res.get("is_valid", True):
+            logger.warning("触发降级发布，抹除损坏的 mermaid 块")
+            # 抹除 mermaid 块
+            markdown = re.sub(r'```mermaid.*?```', '*(思维导图生成失败)*', markdown, flags=re.DOTALL)
+            mindmap = ""
+            
+        briefing.full_markdown = markdown
+        briefing.mindmap_mermaid = mindmap
+        briefing.retry_count = state.get("retry_count", 0)
+        briefing.status = BriefingStatus.COMPLETED
         
         session.commit()
-        
-        # 钉钉推送
-        try:
-            send_mindmap_to_dingtalk(date_str, overview, mindmap_code, [])
-        except Exception as e:
-            logger.error("钉钉推送失败: %s", e)
-
         return {"status": "completed"}
     except Exception as e:
         session.rollback()
-        logger.error("Publish Node 持久化异常: %s", e)
+        logger.error("Publisher 写入失败: %s", e)
         return {"status": "failed"}
     finally:
         session.close()

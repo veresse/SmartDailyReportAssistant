@@ -38,11 +38,14 @@ class RawNewsItem(Base):
     source = Column(String(100), nullable=False, index=True)
     title = Column(String(500), nullable=False)
     url = Column(String(1000), nullable=False)
-    description = Column(Text, default="")
-    raw_content = Column(Text, default="")
+    cleaned_text = Column(Text, default="")
+    feature_text = Column(String(500), default="")
     score = Column(Integer, default=0)
-    extra_data = Column(Text, default="{}")  # JSON 格式存储附加字段
-    ai_tags = Column(Text, default="[]")  # JSON: AI 提取的实体标签
+    slot_json = Column(Text, default="{}")
+    tech_utility_score = Column(Integer, default=0)
+    macro_impact_score = Column(Integer, default=0)
+    scoring_rationale = Column(Text, default="")
+    embedding_vector = Column(Text, default="")
     published_at = Column(String(50), default="")
     is_pushed_instantly = Column(Boolean, default=False)
     collected_at = Column(
@@ -61,8 +64,9 @@ class DailyBriefing(Base):
     status = Column(
         SAEnum(BriefingStatus), default=BriefingStatus.COLLECTING, nullable=False
     )
+    full_markdown = Column(Text, default="")
     mindmap_mermaid = Column(Text, default="")
-    summary_overview = Column(Text, default="")  # 顶部概览文本
+    retry_count = Column(Integer, default=0)
     created_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
