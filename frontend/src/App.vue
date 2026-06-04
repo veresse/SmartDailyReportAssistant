@@ -1,5 +1,6 @@
 <template>
   <div id="briefing-app">
+    <SpaceBackground />
     <nav class="navbar">
       <router-link to="/" class="navbar-brand">
         <span class="logo-mark">A.I.</span>
@@ -18,7 +19,7 @@
 
     <main class="main-content">
       <router-view v-slot="{ Component }">
-        <transition name="fade" mode="out-in">
+        <transition name="fade-slide" mode="out-in">
           <component :is="Component" />
         </transition>
       </router-view>
@@ -41,6 +42,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import SpaceBackground from './components/SpaceBackground.vue'
 import { API_BASE } from './api.js'
 
 const triggering = ref(false)
@@ -78,10 +80,15 @@ async function triggerBriefing() {
 }
 .logo-mark {
   font-family: var(--font-mono);
-  font-weight: 800;
-  font-size: 1.2rem;
+  font-weight: 900;
+  font-size: 2.2rem;
   background: var(--gradient-text);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
+  padding-right: 0.5rem;
+  display: inline-block;
+  transform: translateZ(0);
 }
 </style>

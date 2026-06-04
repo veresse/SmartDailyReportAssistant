@@ -52,12 +52,6 @@ class Settings(BaseSettings):
         description="Prompt 资产文件目录（相对于 backend 根目录）",
     )
 
-    # V0.4 LangSmith 可观测性
-    langchain_tracing_v2: bool = Field(
-        default=False,
-        description="是否开启 LangSmith 可视化 Tracing",
-    )
-
     collect_max_items: int = Field(default=20, description="晨报最多收录的新闻条数")
 
     # 推送与打分阈值
@@ -69,6 +63,11 @@ class Settings(BaseSettings):
     schedule_minute: int = Field(default=0, description="晨报调度执行分钟")
     timezone: str = Field(default="Asia/Shanghai", description="系统时区")
 
+    # 数据清理
+    cleanup_hour: int = Field(default=3, description="数据清理执行小时")
+    cleanup_minute: int = Field(default=0, description="数据清理执行分钟")
+    cleanup_retention_days: int = Field(default=7, description="数据保留天数")
+
     # 推送（Phase 2，可选）
     frontend_base_url: str = Field(default="http://localhost:5173", description="前端访问地址")
     dingtalk_webhook_url: str | None = Field(default=None, description="钉钉 Webhook URL")
@@ -77,7 +76,7 @@ class Settings(BaseSettings):
     dingtalk_timeout: int = Field(default=10, description="钉钉推送超时时间（秒）")
     dingtalk_summary_max_items: int = Field(default=20, description="钉钉兜底新闻摘要最大条数")
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

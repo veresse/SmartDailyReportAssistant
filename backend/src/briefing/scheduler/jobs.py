@@ -275,9 +275,9 @@ def _send_merged_push(items: list[dict]):
 
 
 def generate_daily_briefing(date_str: str | None = None) -> int | None:
-    """Loop B: 每日晨报聚合推送 — 委托给 LangGraph 工作流。"""
-    from briefing.graph.workflow import run_briefing_graph
-    return run_briefing_graph(date_str)
+    """Loop B: 每日晨报聚合推送。"""
+    from briefing.workflow.pipeline import run_briefing_workflow
+    return run_briefing_workflow(date_str)
 
 
 def mark_interrupted_briefings_failed() -> int:

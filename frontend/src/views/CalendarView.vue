@@ -7,19 +7,21 @@
           Intelligence<br>Briefing.
         </h1>
         <p class="editorial-subtitle">
-          基于您的画像，每日深度解析前沿技术资讯，排除噪音。
+          每日深度解析前沿技术资讯，排除噪音。
         </p>
       </section>
 
       <!-- Recent Briefings -->
       <section class="recent-section">
         <h2 class="editorial-section-title">Latest Reports</h2>
-        <div v-if="loading" class="loading-grid">
-          <div v-for="n in 3" :key="n" class="card skeleton-card">
-            <div class="skeleton skeleton-title"></div>
-            <div class="skeleton skeleton-text" style="width: 80%"></div>
-            <div class="skeleton skeleton-text" style="width: 50%"></div>
+        <div v-if="loading" class="space-loader-container">
+          <div class="space-loader">
+            <div class="circle outer"></div>
+            <div class="circle middle"></div>
+            <div class="circle inner"></div>
+            <div class="core-dot"></div>
           </div>
+          <p class="loader-text">SYNCING WITH A.I. CORE <span class="blink">_</span></p>
         </div>
         <div v-else-if="recentBriefings.length === 0" class="empty-state">
           <p class="text-muted">暂无早报数据。点击右上角「手动生成今日早报」开始使用。</p>
@@ -259,16 +261,18 @@ onMounted(async () => {
 
 .calendar-cell {
   aspect-ratio: 1;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   position: relative;
   transition: all var(--transition-fast);
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
   font-size: 0.9rem;
   gap: 2px;
+  backdrop-filter: blur(8px);
 }
 
 .calendar-cell--empty {
@@ -285,12 +289,15 @@ onMounted(async () => {
 }
 
 .calendar-cell--has-data:hover {
-  background: rgba(255,255,255,0.05);
-  transform: scale(1.05);
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
 .calendar-cell--has-briefing {
-  background: var(--gradient-card);
+  background: rgba(34, 211, 238, 0.05);
+  border: 1px solid rgba(34, 211, 238, 0.2);
 }
 
 .calendar-cell--processing {
@@ -363,16 +370,87 @@ onMounted(async () => {
   margin-bottom: 1.5rem;
 }
 
-.loading-grid,
+.space-loader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 0;
+  gap: 2rem;
+}
+
+.space-loader {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.circle {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid transparent;
+}
+
+.outer {
+  width: 100%;
+  height: 100%;
+  border-top-color: var(--color-accent-cyan);
+  border-bottom-color: rgba(34, 211, 238, 0.2);
+  animation: spin 3s linear infinite;
+}
+
+.middle {
+  width: 70%;
+  height: 70%;
+  border-left-color: var(--color-accent-violet);
+  border-right-color: rgba(139, 92, 246, 0.2);
+  animation: spin-reverse 2s linear infinite;
+}
+
+.inner {
+  width: 40%;
+  height: 40%;
+  border-top-color: #ffffff;
+  border-bottom-color: rgba(255, 255, 255, 0.3);
+  animation: spin 1.5s linear infinite;
+}
+
+.core-dot {
+  width: 6px;
+  height: 6px;
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #ffffff, 0 0 20px var(--color-accent-cyan);
+  animation: pulse-glow 2s ease-in-out infinite alternate;
+}
+
+.loader-text {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-accent-cyan);
+  letter-spacing: 0.2em;
+  opacity: 0.8;
+}
+
+.blink {
+  animation: blinker 1s step-end infinite;
+}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }
+@keyframes spin-reverse { 100% { transform: rotate(-360deg); } }
+@keyframes blinker { 50% { opacity: 0; } }
+@keyframes pulse-glow {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(1.2); opacity: 1; }
+}
+
 .briefing-list {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-}
-
-.skeleton-card {
-  padding: 1.5rem;
-  min-height: 120px;
 }
 
 .empty-state {
@@ -382,22 +460,21 @@ onMounted(async () => {
 
 .briefing-card {
   display: block;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  border-left: 2px solid transparent;
-  padding-left: 1.5rem;
-  transition: border-color var(--transition-normal);
+  padding: 1.5rem;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow-sm);
+  backdrop-filter: blur(12px);
+  transition: all var(--transition-normal);
   color: var(--color-text-primary);
 }
 
 .briefing-card:hover {
-  background: transparent;
-  border-color: var(--color-accent-indigo);
-  transform: none;
-  box-shadow: none;
+  background: var(--color-bg-card-hover);
+  border-color: var(--color-border-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .briefing-card-header {
