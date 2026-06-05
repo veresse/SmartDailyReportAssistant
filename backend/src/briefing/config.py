@@ -46,6 +46,10 @@ class Settings(BaseSettings):
         description="Web Scraper 截取正文的最大字符数",
     )
 
+    # 上下文与记忆检索
+    context_lookback_days: int = Field(default=3, description="历史记忆回溯天数")
+    context_max_items: int = Field(default=45, description="历史记忆最大注入条数")
+
     # V0.4 Prompt 资产路径
     prompts_dir: str = Field(
         default="prompts",

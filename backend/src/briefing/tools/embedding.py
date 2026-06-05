@@ -7,6 +7,17 @@ from briefing.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+_embedding_client: OpenAI | None = None
+
+
+def _get_embedding_client() -> OpenAI:
+    """获取 Embedding API 客户端（惰性单例）。"""
+    global _embedding_client
+    if _embedding_client is None:
+        settings = get_settings()
+        _embedding_client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    return _embedding_client
+
 
 def get_embedding(text: str) -> list[float]:
     """调用 Embedding API 获取文本向量。"""
@@ -14,7 +25,7 @@ def get_embedding(text: str) -> list[float]:
     if not text:
         return []
     try:
-        client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+        client = _get_embedding_client()
         response = client.embeddings.create(
             model=settings.embedding_model,
             input=text[:8000],  # 截断防溢出

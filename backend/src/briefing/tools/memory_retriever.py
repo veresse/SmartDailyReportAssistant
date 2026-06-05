@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from briefing.config import get_settings
-from briefing.database import get_session
+from briefing.database import get_session_ctx
 from briefing.models import BriefingItem, DailyBriefing
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,7 @@ def retrieve_relevant_memory(
         datetime.now(local_tz) - timedelta(days=lookback_days)
     ).strftime("%Y-%m-%d")
 
-    session = get_session()
-    try:
+    with get_session_ctx() as session:
         history_items = (
             session.query(BriefingItem)
             .join(DailyBriefing)
@@ -76,6 +75,3 @@ def retrieve_relevant_memory(
             len(relevant),
         )
         return "\n".join(lines)
-
-    finally:
-        session.close()

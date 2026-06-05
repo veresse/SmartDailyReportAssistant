@@ -1,6 +1,7 @@
 """数据库引擎与 Session 管理。"""
 
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -47,9 +48,22 @@ def get_session_factory():
 
 
 def get_session() -> Session:
-    """创建一个新的数据库 Session。"""
+    """创建一个新的数据库 Session。
+
+    建议优先使用 get_session_ctx() 上下文管理器，可自动关闭 session。
+    """
     factory = get_session_factory()
     return factory()
+
+
+@contextmanager
+def get_session_ctx():
+    """上下文管理器形式的 Session，退出时自动关闭。"""
+    session = get_session()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def init_db():

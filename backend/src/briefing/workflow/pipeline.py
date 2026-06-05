@@ -13,8 +13,9 @@ from zoneinfo import ZoneInfo
 from briefing.ai.client import chat_completion, chat_completion_json
 from briefing.ai.prompt_loader import load_prompt
 from briefing.config import get_settings
-from briefing.database import get_session
-from briefing.models import BriefingStatus, DailyBriefing, RawNewsItem
+from briefing.database import get_session, get_session_ctx
+from briefing.models import BriefingItem, BriefingStatus, DailyBriefing, RawNewsItem
+from briefing.tools.memory_retriever import retrieve_relevant_memory
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ def _aggregate(date_str: str) -> tuple[dict, str]:
         (slot_data_by_category, briefing_template)
     """
     settings = get_settings()
-    session = get_session()
 
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -36,28 +36,45 @@ def _aggregate(date_str: str) -> tuple[dict, str]:
     except ValueError:
         prev_date = date_str
 
-    try:
+    with get_session_ctx() as session:
         items = session.query(RawNewsItem).filter(
             RawNewsItem.briefing_date.in_([date_str, prev_date]),
             RawNewsItem.score >= settings.fetch_store_threshold
         ).all()
 
         slot_data_by_category: dict[str, list] = {}
+
+        # LLM event_category → 内部分类键的映射表
+        CATEGORY_MAP = {
+            "技术发布(Tech)": "Tech",
+            "开源项目(OpenSource)": "OpenSource",
+            "商业融资(Biz)": "Biz",
+            "人事变动(HR)": "HR",
+            "政策监管(Policy)": "Policy",
+        }
+        # 兜底：按关键字模糊匹配
+        CATEGORY_FALLBACK_KEYS = [
+            ("Tech", ["Tech", "技术"]),
+            ("OpenSource", ["OpenSource", "开源"]),
+            ("Biz", ["Biz", "商业", "融资"]),
+            ("HR", ["HR", "人事"]),
+            ("Policy", ["Policy", "政策"]),
+        ]
+
         for item in items:
             try:
                 slot = json.loads(item.slot_json)
                 cat = slot.get("meta_routing", {}).get("event_category", "其他")
-                if "Tech" in cat or "技术" in cat:
-                    cat_key = "Tech"
-                elif "OpenSource" in cat or "开源" in cat:
-                    cat_key = "OpenSource"
-                elif "Biz" in cat or "商业" in cat or "融资" in cat:
-                    cat_key = "Biz"
-                elif "HR" in cat or "人事" in cat:
-                    cat_key = "HR"
-                elif "Policy" in cat or "政策" in cat:
-                    cat_key = "Policy"
-                else:
+
+                # 精确匹配优先
+                cat_key = CATEGORY_MAP.get(cat)
+                # 兜底模糊匹配
+                if not cat_key:
+                    for key, keywords in CATEGORY_FALLBACK_KEYS:
+                        if any(kw in cat for kw in keywords):
+                            cat_key = key
+                            break
+                if not cat_key:
                     cat_key = "Tech"
 
                 if cat_key not in slot_data_by_category:
@@ -73,15 +90,28 @@ def _aggregate(date_str: str) -> tuple[dict, str]:
             except Exception:
                 continue
 
+        # 按 collect_max_items 截断，防止单日数据过多导致 LLM token 溢出
+        total = sum(len(v) for v in slot_data_by_category.values())
+        if total > settings.collect_max_items:
+            # 按分数全局排序后截取
+            all_items = []
+            for cat_key, cat_items in slot_data_by_category.items():
+                for it in cat_items:
+                    all_items.append((cat_key, it))
+            all_items.sort(key=lambda x: x[1].get("score", 0), reverse=True)
+            trimmed = all_items[:settings.collect_max_items]
+            slot_data_by_category = {}
+            for cat_key, it in trimmed:
+                slot_data_by_category.setdefault(cat_key, []).append(it)
+
         template = load_prompt("briefing_template.md")
         template = template.replace("{date}", date_str)
 
         return slot_data_by_category, template
-    finally:
-        session.close()
 
 
-def _fill(slot_data_by_category: dict, template: str, feedback: str = "无") -> str:
+def _fill(slot_data_by_category: dict, template: str, feedback: str = "无",
+          historical_context: str = "") -> str:
     """调用 LLM 灌装模板，返回 filled_markdown。"""
     logger.info("执行 Filler 步骤...")
 
@@ -92,6 +122,7 @@ def _fill(slot_data_by_category: dict, template: str, feedback: str = "无") -> 
         slot_data_json=slot_data_json,
         briefing_template=template,
         validator_feedback=feedback,
+        historical_context=historical_context or "暂无近期记忆。",
     )
 
     try:
@@ -143,17 +174,17 @@ def _validate(filled_markdown: str, slot_data_by_category: dict) -> tuple[dict, 
 
 
 def _publish(briefing_id: int, filled_markdown: str, mindmap_code: str,
-             validation_result: dict, retry_count: int) -> str:
-    """最终发布：写入数据库。
+             validation_result: dict, retry_count: int,
+             slot_data_by_category: dict | None = None) -> str:
+    """最终发布：写入数据库，包括 BriefingItem 记录。
 
     Returns:
         "completed" 或 "failed"
     """
     logger.info("执行 Publisher 步骤...")
 
-    session = get_session()
-    try:
-        briefing = session.query(DailyBriefing).get(briefing_id)
+    with get_session_ctx() as session:
+        briefing = session.get(DailyBriefing, briefing_id)
         if not briefing:
             return "failed"
 
@@ -174,14 +205,40 @@ def _publish(briefing_id: int, filled_markdown: str, mindmap_code: str,
         briefing.retry_count = retry_count
         briefing.status = BriefingStatus.COMPLETED
 
-        session.commit()
-        return "completed"
-    except Exception as e:
-        session.rollback()
-        logger.error("Publisher 写入失败: %s", e)
-        return "failed"
-    finally:
-        session.close()
+        # 清除旧 BriefingItem 记录，防止重复触发时累积
+        session.query(BriefingItem).filter(BriefingItem.briefing_id == briefing_id).delete()
+
+        # 写入 BriefingItem 记录，供 memory_retriever 使用
+        if slot_data_by_category:
+            priority = 0
+            for cat_key, items in slot_data_by_category.items():
+                for item in items:
+                    details = item.get("details", {})
+                    core_facts = details.get("core_facts", {})
+                    analytical = details.get("ai_analytical_depth", {})
+
+                    brief_item = BriefingItem(
+                        briefing_id=briefing_id,
+                        source=item.get("source", ""),
+                        title=item.get("title", ""),
+                        url=item.get("url", ""),
+                        one_line_summary=core_facts.get("one_sentence_summary", ""),
+                        key_points=json.dumps(core_facts.get("hard_metrics", []), ensure_ascii=False),
+                        importance=analytical.get("industry_ripple_effect", ""),
+                        background=analytical.get("technical_innovation", ""),
+                        category=cat_key,
+                        priority=priority,
+                    )
+                    session.add(brief_item)
+                    priority += 1
+
+        try:
+            session.commit()
+            return "completed"
+        except Exception as e:
+            session.rollback()
+            logger.error("Publisher 写入失败: %s", e)
+            return "failed"
 
 
 def run_briefing_workflow(date_str: str | None = None) -> int | None:
@@ -196,8 +253,7 @@ def run_briefing_workflow(date_str: str | None = None) -> int | None:
     logger.info("开始生成 %s 的早报...", date_str)
 
     # 初始化 DailyBriefing 记录
-    session = get_session()
-    try:
+    with get_session_ctx() as session:
         briefing = session.query(DailyBriefing).filter_by(date=date_str).first()
         if not briefing:
             briefing = DailyBriefing(date=date_str, status=BriefingStatus.PROCESSING)
@@ -207,14 +263,13 @@ def run_briefing_workflow(date_str: str | None = None) -> int | None:
             briefing.retry_count = 0
             briefing.full_markdown = ""
             briefing.mindmap_mermaid = ""
-        session.commit()
-        briefing_id = briefing.id
-    except Exception as e:
-        session.rollback()
-        logger.error("初始化早报记录失败: %s", e)
-        return None
-    finally:
-        session.close()
+        try:
+            session.commit()
+            briefing_id = briefing.id
+        except Exception as e:
+            session.rollback()
+            logger.error("初始化早报记录失败: %s", e)
+            return None
 
     try:
         # Step 1: Aggregate
@@ -222,16 +277,25 @@ def run_briefing_workflow(date_str: str | None = None) -> int | None:
 
         if not slot_data:
             logger.warning("没有足够的高分新闻来生成 %s 的早报", date_str)
-            session = get_session()
-            try:
-                b = session.query(DailyBriefing).get(briefing_id)
+            with get_session_ctx() as session:
+                b = session.get(DailyBriefing, briefing_id)
                 if b:
                     b.status = BriefingStatus.FAILED
                     b.full_markdown = "今日暂无足够高价值的资讯更新。"
                 session.commit()
-            finally:
-                session.close()
             return briefing_id
+
+        # Step 1.5: 精准记忆检索
+        all_tags = []
+        for cat_items in slot_data.values():
+            for item in cat_items:
+                entities = item.get("details", {}).get("meta_routing", {}).get("key_entities", [])
+                all_tags.extend(entities)
+        historical_context = retrieve_relevant_memory(all_tags)
+        if historical_context:
+            logger.info("已检索到 %d 条历史记忆", len(historical_context.splitlines()))
+        else:
+            logger.info("无相关历史记忆")
 
         # Step 2-3: Fill → Validate → Retry Loop
         feedback = "无"
@@ -241,7 +305,7 @@ def run_briefing_workflow(date_str: str | None = None) -> int | None:
         validation_result: dict = {}
 
         for attempt in range(MAX_RETRIES + 1):
-            filled_markdown = _fill(slot_data, template, feedback)
+            filled_markdown = _fill(slot_data, template, feedback, historical_context)
             validation_result, mindmap_code = _validate(filled_markdown, slot_data)
 
             if validation_result.get("is_valid", False):
@@ -260,21 +324,19 @@ def run_briefing_workflow(date_str: str | None = None) -> int | None:
         # Step 4: Publish
         status = _publish(
             briefing_id, filled_markdown, mindmap_code,
-            validation_result, retry_count,
+            validation_result, retry_count, slot_data,
         )
         logger.info("早报 %s 生成完毕，状态: %s", date_str, status)
         return briefing_id
 
     except Exception as e:
         logger.error("执行早报生成流失败: %s", e)
-        session = get_session()
-        try:
-            b = session.query(DailyBriefing).get(briefing_id)
+        with get_session_ctx() as session:
+            b = session.get(DailyBriefing, briefing_id)
             if b:
                 b.status = BriefingStatus.FAILED
-            session.commit()
-        except Exception:
-            session.rollback()
-        finally:
-            session.close()
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
         return None

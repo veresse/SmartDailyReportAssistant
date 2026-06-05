@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from briefing.config import get_settings
-from briefing.database import get_session
+from briefing.database import get_session_ctx
 from briefing.models import RawNewsItem
 from briefing.tools.embedding import cosine_similarity
 from briefing.ai.client import chat_completion_json
@@ -13,18 +13,17 @@ from briefing.ai.client import chat_completion_json
 logger = logging.getLogger(__name__)
 
 
-def check_duplicate(feature_text: str, embedding: list[float]) -> str:
+def check_duplicate(feature_text: str, embedding: list[float]) -> str | tuple[str, str]:
     """检查新文本是否与近 7 天热库数据重复。
 
     Returns:
-        "pass" | "reject" | "review"
+        "pass" | "reject" | ("review", similar_text)
     """
     settings = get_settings()
     if not embedding:
         return "pass"
 
-    session = get_session()
-    try:
+    with get_session_ctx() as session:
         cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         recent_items = session.query(
             RawNewsItem.feature_text,
@@ -58,8 +57,6 @@ def check_duplicate(feature_text: str, embedding: list[float]) -> str:
             return "review", similar_text
 
         return "pass"
-    finally:
-        session.close()
 
 
 def llm_dedup_review(new_text: str, similar_text: str) -> bool:

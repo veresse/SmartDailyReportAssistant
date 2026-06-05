@@ -6,7 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from briefing.database import get_session
@@ -25,7 +25,7 @@ class RawNewsItemResponse(BaseModel):
     source: str
     title: str
     url: str
-    description: str
+    cleaned_text: str
     score: int
     tech_utility_score: int = 0
     macro_impact_score: int = 0
@@ -47,6 +47,16 @@ class BriefingItemResponse(BaseModel):
     background: str
     category: str
     priority: int
+
+    @field_validator("key_points", mode="before")
+    @classmethod
+    def parse_key_points(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return v
 
 
 class BriefingDetailResponse(BaseModel):

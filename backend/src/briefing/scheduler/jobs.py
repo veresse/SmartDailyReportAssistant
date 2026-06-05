@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from briefing.collectors.rss import fetch_all_feeds
 from briefing.config import get_settings
-from briefing.database import get_session
+from briefing.database import get_session, get_session_ctx
 from briefing.models import (
     BriefingStatus,
     DailyBriefing,
@@ -125,9 +125,8 @@ def fetch_and_instant_push():
     """Loop A: 高频抓取与即时推送。"""
     logger.info("开始执行 Loop A: 高频 RSS 抓取与深度定性管线...")
     settings = get_settings()
-    session = get_session()
 
-    try:
+    with get_session_ctx() as session:
         raw_items = fetch_all_feeds()
         if not raw_items:
             logger.info("Loop A 完成：无新数据")
@@ -179,10 +178,14 @@ def fetch_and_instant_push():
                 if res["final_score"] >= settings.instant_push_threshold:
                     tags = res["slot_json"].get("meta_routing", {}).get("key_entities", [])
                     if should_push(tags):
-                        _send_instant_push(res)
-                        record_push(tags)
-                        db_item.is_pushed_instantly = True
-                    else:
+                        push_ok = _send_instant_push(res)
+                        if push_ok:
+                            record_push(tags)
+                            db_item.is_pushed_instantly = True
+                        elif settings.dingtalk_webhook_url:
+                            logger.info("即时推送失败，稍后可能合并推送: %s", res["item"].title)
+                            pushed_items.append(res)
+                    elif settings.dingtalk_webhook_url:
                         logger.info("防抖熔断，稍后可能合并推送: %s", res["item"].title)
                         pushed_items.append(res)
                         
@@ -200,18 +203,12 @@ def fetch_and_instant_push():
         if len(pushed_items) >= settings.push_throttle_max:
             _send_merged_push(pushed_items)
 
-    except Exception as e:
-        session.rollback()
-        logger.error("Loop A 异常: %s", e)
-    finally:
-        session.close()
 
-
-def _send_instant_push(res: dict):
-    """发送即时快讯到钉钉。"""
+def _send_instant_push(res: dict) -> bool:
+    """发送即时快讯到钉钉。返回是否成功。"""
     settings = get_settings()
     if not settings.dingtalk_webhook_url:
-        return
+        return False
 
     import requests
     from briefing.push.dingtalk import _build_signed_webhook_url
@@ -235,9 +232,12 @@ def _send_instant_push(res: dict):
     }
     
     try:
-        requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
+        resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
+        resp.raise_for_status()
+        return True
     except Exception as e:
         logger.error("即时快讯发送失败: %s", e)
+        return False
 
 
 def _send_merged_push(items: list[dict]):
@@ -281,8 +281,7 @@ def generate_daily_briefing(date_str: str | None = None) -> int | None:
 
 
 def mark_interrupted_briefings_failed() -> int:
-    session = get_session()
-    try:
+    with get_session_ctx() as session:
         interrupted = session.query(DailyBriefing).filter(
             DailyBriefing.status.in_([BriefingStatus.PROCESSING, BriefingStatus.COLLECTING])
         ).all()
@@ -291,18 +290,12 @@ def mark_interrupted_briefings_failed() -> int:
             b.status = BriefingStatus.FAILED
         session.commit()
         return count
-    except Exception as e:
-        session.rollback()
-        return 0
-    finally:
-        session.close()
 
 
 def cleanup_memory():
     """Loop C: 数据库清理。"""
     logger.info("开始清理过期数据与磁盘碎片...")
-    session = get_session()
-    try:
+    with get_session_ctx() as session:
         settings = get_settings()
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_retention_days)
         
@@ -316,9 +309,3 @@ def cleanup_memory():
             session.execute(text("VACUUM"))
             session.commit()
             logger.info("已执行 VACUUM，释放 SQLite 磁盘碎片")
-            
-    except Exception as e:
-        session.rollback()
-        logger.error("数据清理异常: %s", e)
-    finally:
-        session.close()

@@ -62,7 +62,7 @@ class DailyBriefing(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(String(10), unique=True, nullable=False, index=True)  # YYYY-MM-DD
     status = Column(
-        SAEnum(BriefingStatus), default=BriefingStatus.COLLECTING, nullable=False
+        SAEnum(BriefingStatus), default=BriefingStatus.PROCESSING, nullable=False
     )
     full_markdown = Column(Text, default="")
     mindmap_mermaid = Column(Text, default="")

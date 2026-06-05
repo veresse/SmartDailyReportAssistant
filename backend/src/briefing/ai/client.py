@@ -9,17 +9,22 @@ from briefing.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+_client_instance: OpenAI | None = None
+
 
 def get_llm_client() -> OpenAI:
-    """创建 OpenAI 兼容客户端。"""
-    settings = get_settings()
-    return OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    """获取 OpenAI 兼容客户端（惰性单例）。"""
+    global _client_instance
+    if _client_instance is None:
+        settings = get_settings()
+        _client_instance = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    return _client_instance
 
 
 def chat_completion(
     prompt: str,
     system: str = "你是一个专业的科技新闻分析助手。",
-    response_format: str | None = "json",
+    response_format: str | None = None,
     temperature: float = 0.3,
 ) -> str:
     """发送 Chat Completion 请求并返回文本结果。
