@@ -1,38 +1,36 @@
-# ⚡ AI Morning Briefing (专属智能技术资讯助理)
+# ⚡ AI Morning Briefing (专属智能技术资讯助理) V0.5
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.12+-blue.svg)
 ![Vue](https://img.shields.io/badge/vue-3.x-4fc08d.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)
-![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-ff69b4.svg)
 
-**AI Morning Briefing** 是一个面向极客与开发者的“个人专属 AI 资讯助理”。它能够自动从 GitHub Trending、Hacker News、Hugging Face 等高质量信息源采集数据，并利用 **LangGraph 智能体流水线** 根据**您的个人画像**进行深度筛选、打分、去重与智能搜索补全。最后，通过钉钉推送或极简冷峻风的 Web 面板，为您呈现结构化的晨报与技术演进网络。
+**AI Morning Briefing** 是一个面向极客与开发者的准企业级“个人专属 AI 资讯中枢”。它能够自动从高质量信息源采集数据，利用 **大模型自定义流水线** 根据**您的个人画像**进行深度槽位提取、双维打分、语义去重与智能预诊断。最后，通过极具极客美学的炫酷 Web 面板（内置宇宙星空背景）或钉钉推送，为您呈现连贯、专业的全景 Markdown 科技晨报。
 
 ---
 
-## ✨ 核心特性 (V0.4)
+## ✨ 核心特性 (V0.5 架构巨变)
 
-* **🧠 LangGraph 智能体流水线 (Agentic Pipeline)**：摒弃了传统的硬编码流程，Loop B 现由有向无环图 (DAG) 驱动。通过 Map-Reduce 并发架构，大幅提升处理速度与稳定性，并在遇到检索失败时具备节点级重试与优雅降级能力。
-* **🕵️ 意图感知路由 (Intention Routing)**：大模型会在生成摘要时自主判断新闻是否属于“完全陌生的专有名词”、“不知名开源项目”，动态输出 `needs_research` 意图，自动按需触发联网搜索 (DuckDuckGo)，告别死板的分数阈值触发机制。
-* **🌊 智能按需补水 (Content Hydration)**：针对 RSS 源摘要过短（如仅有标题或少于 50 字符）的问题，自动触发 `trafilatura` 工具爬取原文正文，补充上下文信息，极大降低高价值资讯被 LLM 误判为噪音的概率。
-* **🎯 精准记忆检索 (Memory Retriever)**：抛弃暴力注入 N 天历史数据的粗放方式。系统会提取当日所有入围资讯的 `ai_tags`，通过 TF-IDF 词频交集匹配，从历史记录中精准打捞相关记忆，在减少 Token 开销的同时增强脉络连贯性。
-* **🤖 强个性化推荐 (Persona-based)**：通过 `.env` 中的 `USER_PERSONA` 定义你的技术栈与偏好，AI 助理会像资深技术编辑一样为你过滤并打分，仅保留真正对你有用的硬核资讯。
-* **🧩 Prompt 资产化与 Tool 原子化**：所有大模型提示词从代码中剥离，存放在专属的 `prompts/` 目录下；所有外部调用能力（搜索、抓取、记忆检索）均被封装为标准的原子化 Tool。
+* **🏗️ 原生高效流水线 (Linear Workflow)**：V0.5 移除了繁重的 LangGraph 依赖，采用了轻量且掌控力更强的原生线性管线（Pipeline），并在内部实现了“带反馈的多次重试机制（Feedback-loop Retry）”，确保 Markdown 生成结果的完美合规。
+* **🗂️ 结构化槽位提取 (Slot Extraction)**：彻底抛弃了早期版本发散的总结逻辑。通过 `slot_extractor` 强制大模型提取事件分类、关键实体、硬指标 (hard_metrics) 等结构化槽位，让信息高度可控。
+* **⚖️ 双维并轨打分系统**：取代了单一的模糊评分，从“技术实用分 (Tech Utility)”和“宏观影响分 (Macro Impact)”两个独立维度衡量新闻价值，并持久化评分理由，过滤噪音更加科学。
+* **🧬 语义级双轨去重 (Embedding Dedup)**：舍弃了基于标题字符匹配的传统方式，全面引入 Embedding 向量化特征计算。通过设定绝对放行与拦截阈值，精准捕捉“换汤不换药”的重复新闻；处于灰度区间的资讯会自动交由 LLM 裁决。
+* **🛡️ 滑动防抖推送 (Push Throttle)**：针对突发事件导致的刷屏推送问题，引入了基于实体标签的内存级防抖窗口。短时间内同类型的高分突发新闻会被熔断拦截，并优雅合并推送。
+* **🤖 资产化 Prompt 与画像管理**：所有大模型提示词（包括您的个人技术偏好 `persona.txt`）全部分离到 `backend/prompts/` 目录，您可以像编辑文本文件一样随时调教 AI 的品味与工作流。
+* **🌌 全新炫酷前端架构**：彻底重构的 Vue 3 前端，引入了 `SpaceBackground` 星空粒子背景特效，不仅展示双维度复合分数，还能将 AI 撰写的最终内容作为一篇原生多排版 Markdown 长文直接渲染。
 
 ---
 
 ## 🛠️ 技术栈
 
-* **后端引擎**：Python 3.12 + FastAPI + LangGraph + APScheduler + SQLAlchemy
-* **大模型驱动**：兼容 OpenAI API 规范的 LLM + DuckDuckGo Search
-* **前端界面**：Vue 3 + Vite + Vue Router + DOMPurify + Mermaid
+* **后端引擎**：Python 3.12 + FastAPI + APScheduler + SQLAlchemy (无 Langchain/LangGraph 绑架)
+* **AI 基础设施**：兼容 OpenAI 规范的 LLM + 文本 Embedding 向量支持 + DuckDuckGo RAG 搜索
+* **前端界面**：Vue 3 + Vite + Vue Router + DOMPurify (全新星空暗黑主题)
 * **数据库**：无外部依赖的极简本地 SQLite
 
 ---
 
 ## 📦 快速开始
-
-> ⚠️ 注意：V0.4 架构升级后，后端与项目根目录已实现完全解耦，所有后端相关操作均在 `backend/` 目录下进行。
 
 ### 1. 环境准备
 
@@ -69,14 +67,17 @@ LLM_API_KEY=your_api_key_here
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o
 
-# --- 个性化调教 ---
-# 定义你自己的画像，越详细，推荐越准
-USER_PERSONA="我是一名资深后端架构师，主要关注 Python、Go 生态，以及 LLM Agent 落地应用..."
+# --- V0.5 Embedding 去重 ---
+EMBEDDING_MODEL=text-embedding-3-small
+DEDUP_PASS_THRESHOLD=0.80
+DEDUP_REJECT_THRESHOLD=0.95
 
-# --- V0.4 按需补水配置 ---
-SCRAPER_MIN_LENGTH=50
-SCRAPER_MAX_CHARS=1000
+# --- V0.5 防抖推送配置 ---
+PUSH_THROTTLE_WINDOW=1800
+PUSH_THROTTLE_MAX=3
 ```
+
+> **个性化调教**：请直接修改 `backend/prompts/persona.txt` 来定义你的技术栈与偏好，AI 助理会依据这份文件为你过滤新闻。
 
 ### 3. 一键启动
 
@@ -97,29 +98,23 @@ npm run dev
 
 ---
 
-## 📅 工作流说明 (Loops)
+## 📅 系统运转主循环 (Loops)
 
 系统后端由精准的定时任务调度器（APScheduler）驱动，分为三个循环管线：
 
-1. **Loop A (高频资讯雷达)**：每隔一定时间执行。并行从各数据源采集资讯，若发现短内容自动触发 **Content Hydration** 抓取原文。之后交由 LLM 根据 `USER_PERSONA` 进行打分并提取 `ai_tags`。高分内容入库。
-2. **Loop B (智能体总装流水线)**：每天早晨定时执行。LangGraph 工作流被触发：
-   - 提取过去 48h 的高分新闻，语义去重并聚合。
-   - 提取当日所有 `ai_tags`，精准拉取历史脉络（短期记忆）。
-   - Map-Reduce 并发调用 **Analyzer Node**，如果判别存在信息盲区，意图路由至 **Researcher Node** 联网搜索补充背景。
-   - 将结果聚合，生成技术演进思维导图并发布。
-3. **Loop C (自净管线)**：每天凌晨自动清理过期的高频抓取历史数据。
-
----
-
-## 📚 常用 API (开发者)
-
-| 接口路径 | 方法 | 说明 |
-|----------|------|------|
-| `/api/briefings` | GET | 获取近期生成的早报列表 |
-| `/api/briefings/{date}` | GET | 获取指定日期的早报详情（含精选与资讯流） |
-| `/api/trigger?loop=A` | POST | 手动触发高频资讯抓取任务 (Loop A) |
-| `/api/trigger?date=YYYY-MM-DD` | POST | 手动触发 LangGraph 早报生成流 (Loop B) |
-| `/api/briefings/{date}` | DELETE | 删除指定日期早报数据及精选资讯 |
+1. **Loop A (高频资讯摄入管线)**：每隔一定时间执行。
+   - 抓取 RSS -> 文本粗洗 -> 提取特征计算 Embedding
+   - **双轨去重**：余弦相似度硬拦截 + 灰度区 LLM 裁决
+   - **预诊断与 RAG**：判断是否属于盲区并触发搜索
+   - **槽位抽取**：深度解构新闻并进行双维（技术+宏观）打分
+   - **防抖推送**：针对高分突破事件的防刷屏判定入库
+2. **Loop B (长文早报聚合管线)**：每天早晨定时执行。
+   - 提取过去 48h 的高分新闻，组装分类数据。
+   - 读取 `briefing_template.md` 模板，将其交由 Filler 组装器填充内容并生成 Markdown。
+   - 触发 **Validator** 进行合规性审查（如 Mermaid 图表是否正确），若不合规自带 Feedback 退回重做，通过后持久化发布。
+3. **Loop C (碎片清理管线)**：定期自净。
+   - 删除过期的 SQLite 历史数据。
+   - 定期执行 `VACUUM` 释放碎片空间。
 
 ---
 
