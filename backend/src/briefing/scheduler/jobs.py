@@ -18,7 +18,7 @@ from briefing.models import (
 from briefing.tools.web_scraper import scrape_url
 from briefing.tools.text_cleaner import clean_raw_content, extract_feature_text
 from briefing.tools.embedding import get_embedding
-from briefing.tools.dedup_engine import check_duplicate, llm_dedup_review
+
 from briefing.tools.web_search import web_search
 from briefing.ai.client import chat_completion_json
 from briefing.ai.prompt_loader import load_prompt
@@ -31,7 +31,7 @@ def _bounded_workers(requested: int, total: int) -> int:
     return min(max(1, requested), total or 1)
 
 
-def process_single_item(item):
+def process_single_item(item, llm_trigger_count=0):
     """Loop A 处理单条新闻的完整流水线。"""
     settings = get_settings()
     
@@ -49,25 +49,27 @@ def process_single_item(item):
         return None  # 抓取失败或仍太短
         
     feature_text = extract_feature_text(cleaned)
+    feature_windows_json = json.dumps([feature_text], ensure_ascii=False)
     
     # 2. Embedding 向量化
     embedding = get_embedding(feature_text)
     if not embedding:
         return None
         
-    # 3. 双轨前置去重
-    dup_status = check_duplicate(feature_text, embedding)
-    if dup_status == "reject":
-        logger.info("去重拦截 (直接丢弃): %s", item.title)
+    # 3. 候选召回
+    from briefing.tools.dedup_retriever import retrieve_candidates
+    candidates, compute_time_ms = retrieve_candidates(
+        embedding, {}, settings.dedup_lookback_days, settings.dedup_topk
+    )
+    
+    # 4. 预先硬阈值拦截（节省后续所有 LLM 成本）
+    if candidates and candidates[0]["text_sim"] >= settings.dedup_reject_threshold:
+        logger.info(f"硬规则拦截 (相似度 {candidates[0]['text_sim']:.4f}): {item.title}")
+        from briefing.tools.dedup_decider import _log_decision
+        _log_decision(item.url, candidates, "reject", candidates[0]["url"], "threshold_rule_early", "预拦截", candidates[0]["text_sim"], compute_time_ms)
         return None
-    elif isinstance(dup_status, tuple) and dup_status[0] == "review":
-        similar_text = dup_status[1]
-        is_dup = llm_dedup_review(feature_text, similar_text)
-        if is_dup:
-            logger.info("去重拦截 (LLM裁决为重复): %s", item.title)
-            return None
-            
-    # 4. 诊断预判
+
+    # 5. 诊断预判
     diag_prompt_tmpl = load_prompt("diagnostor.txt")
     diag_prompt = diag_prompt_tmpl.format(feature_text=feature_text)
     try:
@@ -76,16 +78,17 @@ def process_single_item(item):
         logger.error("诊断预判失败: %s", e)
         return None
         
-    # 5. 按需 RAG 搜索
+    # 6. 按需 RAG 搜索
     rag_context = "无补充背景"
     if diag_res.get("needs_background_check") and diag_res.get("search_query"):
         query = diag_res["search_query"]
-        logger.info("触发 RAG 搜索: %s", query)
+        intent = diag_res.get("search_intent", "补充背景")
+        logger.info("触发 RAG 搜索 (意图: %s): %s", intent, query)
         search_res = web_search(query)
         if search_res:
             rag_context = "\n".join(f"- {r['title']}: {r['snippet']}" for r in search_res)
             
-    # 6. 信息融合与终审打分
+    # 7. 槽位抽取与指纹生成
     persona = load_prompt("persona.txt")
     extractor_tmpl = load_prompt("slot_extractor.txt")
     extractor_prompt = extractor_tmpl.format(
@@ -101,23 +104,52 @@ def process_single_item(item):
     except Exception as e:
         logger.error("槽位提取失败: %s", e)
         return None
-        
-    # 7. 计算双维分数
+
+    new_fingerprint = slot_json.get("event_fingerprint", {})
+    summary = slot_json.get("core_facts", {}).get("one_sentence_summary", item.title)
+
+    # 8. 灰度决策（结合最新生成的指纹）
+    from briefing.tools.dedup_decider import decide_duplicate
+    status, ref_url, decider, rationale, max_sim = decide_duplicate(
+        item.url, new_fingerprint, summary, candidates, compute_time_ms, llm_trigger_count
+    )
+    
+    if status == "reject":
+        logger.info(f"最终去重拦截 ({decider}): {item.title}")
+        return None
+
+    # 9. Persona 计算双维分数
+    from briefing.tools.persona_matcher import calculate_persona_score
     scoring = slot_json.get("scoring_alignment", {})
     tech = scoring.get("tech_utility_score", 0)
     macro = scoring.get("macro_impact_score", 0)
-    final_score = int(tech * 0.6 + macro * 0.4)
+    
+    cat = new_fingerprint.get("category_short", "Tech")
+    entities = new_fingerprint.get("key_entities", [])
+    metrics = slot_json.get("core_facts", {}).get("hard_metrics", [])
+    actionables = slot_json.get("core_facts", {}).get("developer_actionables", [])
+    
+    final_score, persona_rationale = calculate_persona_score(cat, entities, metrics, actionables, tech, macro)
     
     return {
         "item": item,
         "cleaned_text": cleaned,
         "feature_text": feature_text,
+        "feature_windows_json": feature_windows_json,
         "embedding": embedding,
         "slot_json": slot_json,
+        "event_fingerprint": new_fingerprint,
         "tech_utility_score": tech,
         "macro_impact_score": macro,
+        "persona_match_score": final_score - int(tech * settings.tech_weight + macro * settings.macro_weight),
+        "persona_match_rationale": persona_rationale,
         "scoring_rationale": scoring.get("scoring_rationale", ""),
-        "final_score": final_score
+        "final_score": final_score,
+        "dedup_status": status,
+        "dedup_ref_url": ref_url,
+        "dedup_decider": decider,
+        "dedup_rationale": rationale,
+        "dedup_similarity": max_sim
     }
 
 
@@ -147,8 +179,21 @@ def fetch_and_instant_push():
 
         logger.info("开始处理 %d 条新数据...", len(new_items))
         processed_results = []
+        
+        # 为了能够在多线程中安全传递和累加 llm_trigger_count，我们可以使用一个计数器列表或不严格计较并发数，
+        # 或者为了严格控制，我们可以改用串行或共享计数。
+        # 考虑到“Simplicity First”，且 concurrency 不大，这里我们先传递一个粗略状态。
+        # 实际上 Python 中可以用一个可变对象传递。
+        state = {"llm_count": 0}
+        
+        def process_with_count(item):
+            res = process_single_item(item, state["llm_count"])
+            if res and res.get("dedup_decider") == "llm_eval":
+                state["llm_count"] += 1
+            return res
+
         with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(new_items))) as executor:
-            future_to_item = {executor.submit(process_single_item, item): item for item in new_items}
+            future_to_item = {executor.submit(process_with_count, item): item for item in new_items}
             for future in as_completed(future_to_item):
                 res = future.result()
                 if res:
@@ -164,23 +209,36 @@ def fetch_and_instant_push():
                     url=res["item"].url,
                     cleaned_text=res["cleaned_text"],
                     feature_text=res["feature_text"],
+                    feature_windows_json=res["feature_windows_json"],
                     score=res["final_score"],
                     slot_json=json.dumps(res["slot_json"], ensure_ascii=False),
                     tech_utility_score=res["tech_utility_score"],
                     macro_impact_score=res["macro_impact_score"],
                     scoring_rationale=res["scoring_rationale"],
+                    embedding_model=settings.embedding_model,
                     embedding_vector=json.dumps(res["embedding"]),
+                    event_fingerprint=json.dumps(res["event_fingerprint"], ensure_ascii=False),
+                    dedup_status=res["dedup_status"],
+                    dedup_ref_url=res["dedup_ref_url"],
+                    dedup_decider=res["dedup_decider"],
+                    dedup_rationale=res["dedup_rationale"],
+                    dedup_similarity=res["dedup_similarity"],
+                    persona_match_score=res["persona_match_score"],
+                    persona_match_rationale=res["persona_match_rationale"],
                     published_at=res["item"].published_at,
                     briefing_date=datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d"),
                 )
                 
-                # 防抖与即时推送判断
+                # 防抖与即时推送判断 (V0.6 改为 based on category + top_entity)
                 if res["final_score"] >= settings.instant_push_threshold:
-                    tags = res["slot_json"].get("meta_routing", {}).get("key_entities", [])
-                    if should_push(tags):
+                    cat = res["event_fingerprint"].get("category_short", "Tech")
+                    ent = res["event_fingerprint"].get("top_entity", "Other")
+                    push_key = [cat, ent]
+                    
+                    if should_push(push_key):
                         push_ok = _send_instant_push(res)
                         if push_ok:
-                            record_push(tags)
+                            record_push(push_key)
                             db_item.is_pushed_instantly = True
                         elif settings.dingtalk_webhook_url:
                             logger.info("即时推送失败，稍后可能合并推送: %s", res["item"].title)
@@ -309,3 +367,10 @@ def cleanup_memory():
             session.execute(text("VACUUM"))
             session.commit()
             logger.info("已执行 VACUUM，释放 SQLite 磁盘碎片")
+            
+        # 3. 清理过期 DedupLog 和 DedupPairCache
+        from briefing.models import DedupLog, DedupPairCache
+        session.query(DedupLog).filter(DedupLog.created_at < cutoff).delete()
+        session.query(DedupPairCache).filter(DedupPairCache.created_at < cutoff).delete()
+        session.commit()
+        logger.info("已清理过期缓存与日志")

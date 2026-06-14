@@ -268,7 +268,7 @@ onMounted(async () => {
   justify-content: center;
   position: relative;
   transition: all var(--transition-fast);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(0, 0, 0, 0.02); /* Changed for light mode */
   border: 1px solid transparent;
   font-size: 0.9rem;
   gap: 2px;
@@ -281,23 +281,26 @@ onMounted(async () => {
 
 .calendar-cell--today {
   border: 1px solid var(--color-accent-indigo);
+  background: rgba(106, 91, 255, 0.05); /* Highlight today */
 }
 
 .calendar-cell--has-data {
   cursor: pointer;
   background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 
 .calendar-cell--has-data:hover {
-  background: rgba(255,255,255,0.06);
-  border-color: rgba(255,255,255,0.15);
+  background: var(--color-bg-card-hover);
+  border-color: var(--color-border-hover);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  box-shadow: 0 8px 16px rgba(91,108,255,0.12);
 }
 
 .calendar-cell--has-briefing {
-  background: rgba(34, 211, 238, 0.05);
-  border: 1px solid rgba(34, 211, 238, 0.2);
+  background: rgba(34, 197, 94, 0.05); /* Soft green */
+  border: 1px solid rgba(34, 197, 94, 0.3);
 }
 
 .calendar-cell--processing {

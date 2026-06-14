@@ -60,11 +60,18 @@ def _aggregate(date_str: str) -> tuple[dict, str]:
             ("HR", ["HR", "人事"]),
             ("Policy", ["Policy", "政策"]),
         ]
+        
+        # 事件聚合：相同的 dedup_ref_url 归为一个簇。如果没有 dedup_ref_url，就用自己的 url。
+        clusters = {}
 
         for item in items:
             try:
                 slot = json.loads(item.slot_json)
-                cat = slot.get("meta_routing", {}).get("event_category", "其他")
+                fp = {}
+                if item.event_fingerprint:
+                    fp = json.loads(item.event_fingerprint)
+                    
+                cat = fp.get("category_short") or slot.get("meta_routing", {}).get("event_category", "其他")
 
                 # 精确匹配优先
                 cat_key = CATEGORY_MAP.get(cat)
@@ -77,18 +84,44 @@ def _aggregate(date_str: str) -> tuple[dict, str]:
                 if not cat_key:
                     cat_key = "Tech"
 
-                if cat_key not in slot_data_by_category:
-                    slot_data_by_category[cat_key] = []
-
-                slot_data_by_category[cat_key].append({
-                    "title": item.title,
-                    "url": item.url,
-                    "score": item.score,
-                    "source": item.source,
-                    "details": slot,
-                })
+                cluster_id = item.dedup_ref_url if item.dedup_ref_url else item.url
+                
+                if cluster_id not in clusters:
+                    clusters[cluster_id] = {
+                        "cat_key": cat_key,
+                        "main_item": item,
+                        "main_slot": slot,
+                        "related_sources": []
+                    }
+                else:
+                    # 如果簇已存在，我们仅补充来源和不同的 hard_metrics
+                    clusters[cluster_id]["related_sources"].append({
+                        "title": item.title,
+                        "url": item.url,
+                        "source": item.source,
+                        "metrics": slot.get("core_facts", {}).get("hard_metrics", [])
+                    })
+                    
             except Exception:
                 continue
+
+        # 将聚类结果转化回 slot_data_by_category 供 Filler 使用
+        for cluster_id, data in clusters.items():
+            cat_key = data["cat_key"]
+            item = data["main_item"]
+            slot = data["main_slot"]
+            
+            if cat_key not in slot_data_by_category:
+                slot_data_by_category[cat_key] = []
+                
+            slot_data_by_category[cat_key].append({
+                "title": item.title,
+                "url": item.url,
+                "score": item.score,
+                "source": item.source,
+                "details": slot,
+                "related_coverage": data["related_sources"]
+            })
 
         # 按 collect_max_items 截断，防止单日数据过多导致 LLM token 溢出
         total = sum(len(v) for v in slot_data_by_category.values())

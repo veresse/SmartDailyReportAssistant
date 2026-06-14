@@ -59,35 +59,11 @@
           <p class="text-muted">今日暂无采集数据。</p>
         </div>
         <div v-else class="feed-list">
-          <a
+          <FeaturedCard
             v-for="item in feedItems"
             :key="item.id"
-            :href="item.url"
-            target="_blank"
-            rel="noopener"
-            class="feed-card editorial-news-item"
-          >
-            <div class="feed-score-wrapper">
-              <div class="feed-scores-multi">
-                <span class="feed-score" :class="scoreClass(item.score)" title="综合得分">{{ item.score }}</span>
-                <div class="sub-scores">
-                  <span class="sub-score text-muted" title="技术实用分">T:{{ item.tech_utility_score || 0 }}</span>
-                  <span class="sub-score text-muted" title="宏观影响分">M:{{ item.macro_impact_score || 0 }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="feed-content">
-              <h3 class="feed-title">
-                <span v-if="item.is_pushed_instantly" class="instant-badge" title="触发了即时推送">⚡</span>
-                {{ item.title }}
-              </h3>
-              <div class="feed-meta">
-                <span class="text-muted">{{ formatTime(item.collected_at) }}</span>
-                <span class="separator">·</span>
-                <span :class="['tag', 'tag-sm', sourceTagClass(item.source)]">{{ sourceLabel(item.source) }}</span>
-              </div>
-            </div>
-          </a>
+            :item="item"
+          />
         </div>
       </section>
 
@@ -104,6 +80,7 @@ import { ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { deleteBriefing, fetchBriefingDetail, fetchFeed } from '../api.js'
+import FeaturedCard from '../components/FeaturedCard.vue'
 
 const props = defineProps({
   date: { type: String, required: true },
@@ -118,30 +95,9 @@ const expandedBgs = ref(new Set())
 const mermaidContainer = ref(null)
 const highlightedNewsId = ref(null)
 
-function sourceTagClass(source) {
-  const map = {
-    github: 'tag-github',
-    hackernews: 'tag-hackernews',
-    huggingface: 'tag-huggingface',
-  }
-  return map[(source || '').toLowerCase()] || 'tag-category'
-}
 
-function sourceLabel(source) {
-  return source || 'RSS'
-}
 
-function scoreClass(score) {
-  if (score >= 90) return 'score-high'
-  if (score >= 70) return 'score-medium'
-  return 'score-low'
-}
 
-function formatTime(isoStr) {
-  if (!isoStr) return ''
-  const d = new Date(isoStr)
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
-}
 
 function parseAITags(tagsStr) {
   if (!tagsStr) return [];
@@ -593,77 +549,7 @@ watch(
 .feed-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-}
-
-.feed-card {
-  display: flex;
-  align-items: flex-start;
-  padding: 1.5rem 0;
-  gap: 1.5rem;
-  color: inherit;
-  border-bottom: 1px solid var(--color-border);
-  transition: opacity var(--transition-fast);
-}
-
-.feed-card:last-child {
-  border-bottom: none;
-}
-
-.feed-card:hover {
-  opacity: 0.7;
-}
-
-.feed-score-wrapper {
-  flex-shrink: 0;
-  width: 40px;
-  text-align: center;
-}
-
-.feed-score {
-  font-weight: 800;
-  font-size: 1.1rem;
-}
-
-.score-high { color: var(--color-accent-rose); }
-.score-medium { color: var(--color-accent-amber); }
-.score-low { color: var(--color-text-muted); }
-
-.feed-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.feed-title {
-  font-size: 1rem;
-  font-weight: 600;
-  margin-bottom: 0.25rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.instant-badge {
-  font-size: 0.85rem;
-}
-
-.feed-meta {
-  font-size: 0.8rem;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.separator {
-  color: var(--color-border);
-}
-
-.tag-sm {
-  font-size: 0.65rem;
-  padding: 1px 6px;
+  gap: 1rem;
 }
 
 @media (max-width: 640px) {
@@ -788,77 +674,7 @@ watch(
   gap: 1rem;
 }
 
-.feed-card {
-  display: flex;
-  align-items: flex-start;
-  padding: 1.5rem;
-  gap: 1.5rem;
-  color: inherit;
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow-sm);
-  backdrop-filter: blur(12px);
-  transition: all var(--transition-fast);
-}
 
-.feed-card:hover {
-  background: var(--color-bg-card-hover);
-  border-color: var(--color-border-hover);
-  transform: translateY(-2px);
-}
-
-.feed-score-wrapper {
-  flex-shrink: 0;
-  width: 40px;
-  text-align: center;
-}
-
-.feed-score {
-  font-weight: 800;
-  font-size: 1.1rem;
-}
-
-.score-high { color: var(--color-accent-rose); }
-.score-medium { color: var(--color-accent-amber); }
-.score-low { color: var(--color-text-muted); }
-
-.feed-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.feed-title {
-  font-size: 1rem;
-  font-weight: 600;
-  margin-bottom: 0.25rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.instant-badge {
-  font-size: 0.85rem;
-}
-
-.feed-meta {
-  font-size: 0.8rem;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.separator {
-  color: var(--color-border);
-}
-
-.tag-sm {
-  font-size: 0.65rem;
-  padding: 1px 6px;
-}
 
 @media (max-width: 640px) {
   .detail-header-main {
@@ -916,22 +732,5 @@ watch(
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
-.feed-scores-multi {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
 
-.sub-scores {
-  display: flex;
-  gap: 4px;
-  font-size: 0.7rem;
-}
-
-.sub-score {
-  background: var(--color-bg-tertiary);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
 </style>

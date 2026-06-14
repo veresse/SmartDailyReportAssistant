@@ -38,10 +38,16 @@
 - `technical_innovation`: 深入挖掘底层。指出该技术在架构、量化、注意力、数据清洗等方面具体的“非微调类”本质创新。如果是纯商业/人事新闻，此处填空。
 - `industry_ripple_effect`: 评估蝴蝶效应。该事件对竞争对手或开源/闭源天平会产生什么实质性的博弈影响（例如：该模型的低价发布，是否会迫使闭源厂商调降 API 价格？）。
 
-### 4. `scoring_alignment` (双轨打分与对齐解释)
+### 4. `event_fingerprint` (事件指纹)
+必须根据提取到的事实生成一个“事件级指纹”对象。用于跨新闻源的精确去重聚类。
+- `category_short`: 极短的分类标识 (如 Tech, OpenSource, Biz, HR, Policy)。
+- `top_entity`: 核心主语实体 (如 "Llama-3")。
+- `claim`: 核心主张或动作极简短语 (如 "发布 8B 权重", "融资 10亿美元")。
+
+### 5. `scoring_alignment` (基础打分与对齐解释)
 - `tech_utility_score`: 整数(0-100)。严密对齐用户画像中的【核心关注点】。凡是无开源代码、无 API 更新、无法立刻用于工程落地的纯公关新闻，此分不得超过 40 分。
-- `macro_impact_score`: 整数(0-100)。评估该新闻在整个 AI 行业宏观层面的震撼与波及程度（如：顶级高管离职、巨额反垄断调查）。
-- `scoring_rationale`: 必须采用严密的思维链 (CoT) 逻辑，为你的打分进行**对齐辩护**。特别是当这是一条非技术新闻（如 Biz/HR）但你打出了高分时，必须明确向开发者解释：这笔商业变动或人事震荡，未来将如何通过算力、成本、或团队迁移间接影响到一线的应用开发。
+- `macro_impact_score`: 整数(0-100)。评估该新闻在整个 AI 行业宏观层面的震撼与波及程度。
+- `scoring_rationale`: 提供打分理由。
 
 ---
 
@@ -64,6 +70,11 @@
   "ai_analytical_depth": {{
     "technical_innovation": "...",
     "industry_ripple_effect": "..."
+  }},
+  "event_fingerprint": {{
+    "category_short": "...",
+    "top_entity": "...",
+    "claim": "..."
   }},
   "scoring_alignment": {{
     "tech_utility_score": 0,

@@ -3,13 +3,13 @@ import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import './style.css'
 
-import CalendarView from './views/CalendarView.vue'
+import DashboardView from './views/DashboardView.vue'
 import BriefingDetail from './views/BriefingDetail.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', name: 'home', component: CalendarView },
+    { path: '/', name: 'home', component: DashboardView },
     { path: '/briefing/:date', name: 'briefing', component: BriefingDetail, props: true },
   ],
 })

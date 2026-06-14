@@ -1,6 +1,5 @@
 <template>
   <div id="briefing-app">
-    <SpaceBackground />
     <nav class="navbar">
       <router-link to="/" class="navbar-brand">
         <span class="logo-mark">A.I.</span>
@@ -42,7 +41,6 @@
 
 <script setup>
 import { ref } from 'vue'
-import SpaceBackground from './components/SpaceBackground.vue'
 import { API_BASE } from './api.js'
 
 const triggering = ref(false)

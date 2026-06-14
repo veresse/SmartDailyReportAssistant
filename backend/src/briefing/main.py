@@ -106,6 +106,9 @@ app.add_middleware(
 
 app.include_router(router)
 
+from briefing.api.debug import router as debug_router
+app.include_router(debug_router)
+
 
 @app.get("/health")
 def health_check():

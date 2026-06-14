@@ -27,12 +27,22 @@ class Settings(BaseSettings):
     llm_concurrency: int = Field(default=5, description="LLM 处理并发数")
 
     
-    # V0.5 Embedding
+    # V0.5 & V0.6 Embedding / Dedup
     embedding_model: str = Field(default="text-embedding-3-small", description="Embedding 模型名称")
+    dedup_pass_threshold: float = Field(default=0.82, description="向量去重放行阈值")
+    dedup_reject_threshold: float = Field(default=0.93, description="向量去重丢弃阈值")
+    dedup_lookback_days: int = Field(default=7, description="去重历史比对天数")
+    dedup_topk: int = Field(default=20, description="去重候选召回数量")
+    dedup_gray_llm: bool = Field(default=True, description="是否启用灰度 LLM 裁决")
+    dedup_gray_topn: int = Field(default=3, description="对 TopK 中的前 N 个触发 LLM")
+    dedup_gray_limit: int = Field(default=5, description="单次抓取触发 LLM 去重的上限次数")
 
-    # V0.5 去重与防抖
-    dedup_pass_threshold: float = Field(default=0.80, description="向量去重放行阈值")
-    dedup_reject_threshold: float = Field(default=0.95, description="向量去重丢弃阈值")
+    # V0.6 Persona
+    persona_weight: float = Field(default=0.15, description="Persona 匹配度在最终评分中的权重")
+    tech_weight: float = Field(default=0.55, description="技术实用分权重")
+    macro_weight: float = Field(default=0.30, description="宏观影响分权重")
+
+    # 防抖推送
     push_throttle_window: int = Field(default=1800, description="防抖窗口秒数")
     push_throttle_max: int = Field(default=3, description="窗口内最大推送次数")
 
