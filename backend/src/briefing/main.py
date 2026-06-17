@@ -68,6 +68,13 @@ async def lifespan(app: FastAPI):
         name="数据清理：过期数据删除",
         replace_existing=True,
     )
+    scheduler.add_job(
+        mark_interrupted_briefings_failed,
+        trigger=IntervalTrigger(hours=1),
+        id="cleanup_interrupted",
+        name="状态恢复：清理卡死的生成任务",
+        replace_existing=True,
+    )
 
     scheduler.start()
     logger.info(
@@ -98,7 +105,7 @@ app = FastAPI(
 # CORS - 允许前端开发服务器访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[get_settings().frontend_base_url],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,8 +113,9 @@ app.add_middleware(
 
 app.include_router(router)
 
-from briefing.api.debug import router as debug_router
-app.include_router(debug_router)
+if get_settings().debug_mode:
+    from briefing.api.debug import router as debug_router
+    app.include_router(debug_router)
 
 
 @app.get("/health")

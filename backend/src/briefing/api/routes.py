@@ -5,16 +5,20 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import threading
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from briefing.database import get_session
 from briefing.models import BriefingStatus, DailyBriefing, BriefingItem, RawNewsItem
+from briefing.api.auth import require_api_key, rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["briefing"])
 
+_loop_a_lock = threading.Lock()
+_loop_a_running = False
 
 # ---- Response Schemas ----
 
@@ -157,17 +161,42 @@ def get_briefing(date: str, db: Session = Depends(_get_db)):
 
 
 @router.post("/trigger", response_model=TriggerResponse)
-def trigger_briefing(date: str | None = None, loop: str = "A"):
+def trigger_briefing(date: str | None = None, loop: str = "A", api_key: str = Depends(rate_limit)):
     """手动触发早报或抓取。loop="A" 为高频抓取，loop="B" 为晨报生成。"""
     from briefing.scheduler.jobs import fetch_and_instant_push, generate_daily_briefing
     
-    if loop == "A":
+    if loop not in ("A", "B"):
+        raise HTTPException(status_code=422, detail="loop 参数仅支持 A 或 B")
+
+    if date:
         try:
-            # 这里的调用最好是异步或放到后台执行，这里为了简单直接调用（如果抓取很慢可能会超时）
-            import threading
-            threading.Thread(target=fetch_and_instant_push).start()
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date 参数格式错误，需为 YYYY-MM-DD")
+
+    if loop == "A":
+        global _loop_a_running
+        with _loop_a_lock:
+            if _loop_a_running:
+                raise HTTPException(status_code=429, detail="Loop A 正在运行中，请稍后再试")
+            _loop_a_running = True
+
+        def run_loop_a():
+            global _loop_a_running
+            try:
+                fetch_and_instant_push()
+            except Exception as e:
+                logger.error("后台 Loop A 异常: %s", e)
+            finally:
+                with _loop_a_lock:
+                    _loop_a_running = False
+
+        try:
+            threading.Thread(target=run_loop_a).start()
             return TriggerResponse(message="已触发高频抓取与打分 (后台运行中)")
         except Exception as e:
+            with _loop_a_lock:
+                _loop_a_running = False
             logger.error("触发 Loop A 失败: %s", e)
             raise HTTPException(status_code=500, detail=f"触发失败: {e}") from e
 
@@ -190,7 +219,7 @@ def trigger_briefing(date: str | None = None, loop: str = "A"):
 
 
 @router.delete("/briefings/{date}", response_model=DeleteBriefingResponse)
-def delete_briefing(date: str, db: Session = Depends(_get_db)):
+def delete_briefing(date: str, db: Session = Depends(_get_db), api_key: str = Depends(require_api_key)):
     """删除指定日期早报及其关联数据。"""
     briefing = (
         db.query(DailyBriefing)

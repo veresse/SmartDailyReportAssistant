@@ -9,6 +9,9 @@ from pydantic import Field
 class Settings(BaseSettings):
     """应用全局配置。"""
 
+    api_secret_key: str | None = Field(default=None, description="API 写操作认证密钥")
+    debug_mode: bool = Field(default=False, description="是否启用 Debug API")
+
     # LLM
     llm_api_key: str = Field(description="LLM API Key")
     llm_base_url: str = Field(default="https://api.openai.com/v1", description="LLM API Base URL")

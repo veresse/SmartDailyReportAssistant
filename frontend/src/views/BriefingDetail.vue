@@ -197,7 +197,7 @@ async function renderMermaid() {
       renderId,
       briefing.value.mindmap_mermaid,
     )
-    mermaidContainer.value.innerHTML = svg
+    mermaidContainer.value.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } })
   } catch (err) {
     console.error('Mermaid 渲染失败:', err)
     mermaidContainer.value.innerHTML = `

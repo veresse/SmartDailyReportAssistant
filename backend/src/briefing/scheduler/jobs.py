@@ -180,16 +180,17 @@ def fetch_and_instant_push():
         logger.info("开始处理 %d 条新数据...", len(new_items))
         processed_results = []
         
-        # 为了能够在多线程中安全传递和累加 llm_trigger_count，我们可以使用一个计数器列表或不严格计较并发数，
-        # 或者为了严格控制，我们可以改用串行或共享计数。
-        # 考虑到“Simplicity First”，且 concurrency 不大，这里我们先传递一个粗略状态。
-        # 实际上 Python 中可以用一个可变对象传递。
+        import threading
+        llm_count_lock = threading.Lock()
         state = {"llm_count": 0}
         
         def process_with_count(item):
-            res = process_single_item(item, state["llm_count"])
+            with llm_count_lock:
+                current_count = state["llm_count"]
+            res = process_single_item(item, current_count)
             if res and res.get("dedup_decider") == "llm_eval":
-                state["llm_count"] += 1
+                with llm_count_lock:
+                    state["llm_count"] += 1
             return res
 
         with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(new_items))) as executor:
@@ -327,7 +328,8 @@ def _send_merged_push(items: list[dict]):
         }
     }
     try:
-        requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
+        resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=settings.dingtalk_timeout)
+        resp.raise_for_status()
     except Exception as e:
         logger.error("合并推送发送失败: %s", e)
 
