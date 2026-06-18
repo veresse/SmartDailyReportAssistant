@@ -15,7 +15,9 @@ def _get_embedding_client() -> OpenAI:
     global _embedding_client
     if _embedding_client is None:
         settings = get_settings()
-        _embedding_client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+        api_key = settings.embedding_api_key or settings.llm_api_key
+        base_url = settings.embedding_base_url or settings.llm_base_url
+        _embedding_client = OpenAI(api_key=api_key, base_url=base_url)
     return _embedding_client
 
 

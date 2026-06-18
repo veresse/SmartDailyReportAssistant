@@ -47,13 +47,21 @@ export async function fetchBriefingDetail(date) {
   return resp.json()
 }
 
+export const API_HEADERS = {
+  'Content-Type': 'application/json',
+  ...(import.meta.env.VITE_API_SECRET_KEY ? { 'X-API-Key': import.meta.env.VITE_API_SECRET_KEY } : {})
+}
+
 /**
  * 删除指定日期的早报及关联数据。
  * @param {string} date - YYYY-MM-DD
  * @returns {Promise<Object>}
  */
 export async function deleteBriefing(date) {
-  const resp = await fetch(`${API_BASE}/briefings/${date}`, { method: 'DELETE' })
+  const resp = await fetch(`${API_BASE}/briefings/${date}`, { 
+    method: 'DELETE',
+    headers: API_HEADERS
+  })
   if (!resp.ok) {
     const message = await resp.text()
     throw new Error(message || '删除早报失败')

@@ -158,109 +158,110 @@ def fetch_and_instant_push():
     logger.info("开始执行 Loop A: 高频 RSS 抓取与深度定性管线...")
     settings = get_settings()
 
-    with get_session_ctx() as session:
-        raw_items = fetch_all_feeds()
-        if not raw_items:
-            logger.info("Loop A 完成：无新数据")
-            return
+    raw_items = fetch_all_feeds()
+    if not raw_items:
+        logger.info("Loop A 完成：无新数据")
+        return
 
-        # 简单 URL 去重
-        recent_cutoff = datetime.now(timezone.utc) - timedelta(days=2)
+    # 简单 URL 去重
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=2)
+    with get_session_ctx() as session:
         existing_urls = {
             url[0] for url in session.query(RawNewsItem.url).filter(
                 RawNewsItem.collected_at >= recent_cutoff
             ).all()
         }
-        
-        new_items = [i for i in raw_items if i.url not in existing_urls]
-        if not new_items:
-            logger.info("Loop A 完成：抓取的数据已在数据库中存在")
-            return
+    
+    new_items = [i for i in raw_items if i.url not in existing_urls]
+    if not new_items:
+        logger.info("Loop A 完成：抓取的数据已在数据库中存在")
+        return
 
-        logger.info("开始处理 %d 条新数据...", len(new_items))
-        processed_results = []
-        
-        import threading
-        llm_count_lock = threading.Lock()
-        state = {"llm_count": 0}
-        
-        def process_with_count(item):
+    logger.info("开始处理 %d 条新数据...", len(new_items))
+    processed_results = []
+    
+    import threading
+    llm_count_lock = threading.Lock()
+    state = {"llm_count": 0}
+    
+    def process_with_count(item):
+        with llm_count_lock:
+            current_count = state["llm_count"]
+        res = process_single_item(item, current_count)
+        if res and res.get("dedup_decider") == "llm_eval":
             with llm_count_lock:
-                current_count = state["llm_count"]
-            res = process_single_item(item, current_count)
-            if res and res.get("dedup_decider") == "llm_eval":
-                with llm_count_lock:
-                    state["llm_count"] += 1
-            return res
+                state["llm_count"] += 1
+        return res
 
-        with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(new_items))) as executor:
-            future_to_item = {executor.submit(process_with_count, item): item for item in new_items}
-            for future in as_completed(future_to_item):
-                res = future.result()
-                if res:
-                    processed_results.append(res)
+    with ThreadPoolExecutor(max_workers=_bounded_workers(settings.llm_concurrency, len(new_items))) as executor:
+        future_to_item = {executor.submit(process_with_count, item): item for item in new_items}
+        for future in as_completed(future_to_item):
+            res = future.result()
+            if res:
+                processed_results.append(res)
 
-        to_insert = []
-        pushed_items = []
-        for res in processed_results:
-            if res["final_score"] >= settings.fetch_store_threshold:
-                db_item = RawNewsItem(
-                    source=res["item"].source,
-                    title=res["item"].title,
-                    url=res["item"].url,
-                    cleaned_text=res["cleaned_text"],
-                    feature_text=res["feature_text"],
-                    feature_windows_json=res["feature_windows_json"],
-                    score=res["final_score"],
-                    slot_json=json.dumps(res["slot_json"], ensure_ascii=False),
-                    tech_utility_score=res["tech_utility_score"],
-                    macro_impact_score=res["macro_impact_score"],
-                    scoring_rationale=res["scoring_rationale"],
-                    embedding_model=settings.embedding_model,
-                    embedding_vector=json.dumps(res["embedding"]),
-                    event_fingerprint=json.dumps(res["event_fingerprint"], ensure_ascii=False),
-                    dedup_status=res["dedup_status"],
-                    dedup_ref_url=res["dedup_ref_url"],
-                    dedup_decider=res["dedup_decider"],
-                    dedup_rationale=res["dedup_rationale"],
-                    dedup_similarity=res["dedup_similarity"],
-                    persona_match_score=res["persona_match_score"],
-                    persona_match_rationale=res["persona_match_rationale"],
-                    published_at=res["item"].published_at,
-                    briefing_date=datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d"),
-                )
+    to_insert = []
+    pushed_items = []
+    for res in processed_results:
+        if res["final_score"] >= settings.fetch_store_threshold:
+            db_item = RawNewsItem(
+                source=res["item"].source,
+                title=res["item"].title,
+                url=res["item"].url,
+                cleaned_text=res["cleaned_text"],
+                feature_text=res["feature_text"],
+                feature_windows_json=res["feature_windows_json"],
+                score=res["final_score"],
+                slot_json=json.dumps(res["slot_json"], ensure_ascii=False),
+                tech_utility_score=res["tech_utility_score"],
+                macro_impact_score=res["macro_impact_score"],
+                scoring_rationale=res["scoring_rationale"],
+                embedding_model=settings.embedding_model,
+                embedding_vector=json.dumps(res["embedding"]),
+                event_fingerprint=json.dumps(res["event_fingerprint"], ensure_ascii=False),
+                dedup_status=res["dedup_status"],
+                dedup_ref_url=res["dedup_ref_url"],
+                dedup_decider=res["dedup_decider"],
+                dedup_rationale=res["dedup_rationale"],
+                dedup_similarity=res["dedup_similarity"],
+                persona_match_score=res["persona_match_score"],
+                persona_match_rationale=res["persona_match_rationale"],
+                published_at=res["item"].published_at,
+                briefing_date=datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d"),
+            )
+            
+            # 防抖与即时推送判断 (V0.6 改为 based on category + top_entity)
+            if res["final_score"] >= settings.instant_push_threshold:
+                cat = res["event_fingerprint"].get("category_short", "Tech")
+                ent = res["event_fingerprint"].get("top_entity", "Other")
+                push_key = [cat, ent]
                 
-                # 防抖与即时推送判断 (V0.6 改为 based on category + top_entity)
-                if res["final_score"] >= settings.instant_push_threshold:
-                    cat = res["event_fingerprint"].get("category_short", "Tech")
-                    ent = res["event_fingerprint"].get("top_entity", "Other")
-                    push_key = [cat, ent]
-                    
-                    if should_push(push_key):
-                        push_ok = _send_instant_push(res)
-                        if push_ok:
-                            record_push(push_key)
-                            db_item.is_pushed_instantly = True
-                        elif settings.dingtalk_webhook_url:
-                            logger.info("即时推送失败，稍后可能合并推送: %s", res["item"].title)
-                            pushed_items.append(res)
+                if should_push(push_key):
+                    push_ok = _send_instant_push(res)
+                    if push_ok:
+                        record_push(push_key)
+                        db_item.is_pushed_instantly = True
                     elif settings.dingtalk_webhook_url:
-                        logger.info("防抖熔断，稍后可能合并推送: %s", res["item"].title)
+                        logger.info("即时推送失败，稍后可能合并推送: %s", res["item"].title)
                         pushed_items.append(res)
-                        
-                to_insert.append(db_item)
+                elif settings.dingtalk_webhook_url:
+                    logger.info("防抖熔断，稍后可能合并推送: %s", res["item"].title)
+                    pushed_items.append(res)
+                    
+            to_insert.append(db_item)
 
-        if to_insert:
+    if to_insert:
+        max_score = max(i.score for i in to_insert)
+        with get_session_ctx() as session:
             session.add_all(to_insert)
             session.commit()
-            logger.info("Loop A 完成：新增入库 %d 条，最高分: %d", 
-                        len(to_insert), max(i.score for i in to_insert))
-        else:
-            logger.info("Loop A 完成：无满足分数门槛的数据入库")
+        logger.info("Loop A 完成：新增入库 %d 条，最高分: %d", len(to_insert), max_score)
+    else:
+        logger.info("Loop A 完成：无满足分数门槛的数据入库")
 
-        # 合并推送 (如果被熔断的很多)
-        if len(pushed_items) >= settings.push_throttle_max:
-            _send_merged_push(pushed_items)
+    # 合并推送 (如果被熔断的很多)
+    if len(pushed_items) >= settings.push_throttle_max:
+        _send_merged_push(pushed_items)
 
 
 def _send_instant_push(res: dict) -> bool:

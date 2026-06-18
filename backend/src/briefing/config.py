@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     llm_api_key: str = Field(description="LLM API Key")
     llm_base_url: str = Field(default="https://api.openai.com/v1", description="LLM API Base URL")
     llm_model: str = Field(default="gpt-4o", description="LLM 模型名称")
+    
+    # Embedding API (可选，若不填则默认回退到 LLM 配置)
+    embedding_api_key: str | None = Field(default=None, description="专门为 Embedding 提供的 API Key")
+    embedding_base_url: str | None = Field(default=None, description="专门为 Embedding 提供的 Base URL")
 
     # 数据库
     database_url: str = Field(

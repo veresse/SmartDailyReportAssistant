@@ -41,7 +41,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { API_BASE } from './api.js'
+import { API_BASE, API_HEADERS } from './api'
 
 const triggering = ref(false)
 const toasts = ref([])
@@ -59,7 +59,10 @@ function showToast(message, type = 'success') {
 async function triggerBriefing() {
   triggering.value = true
   try {
-    const resp = await fetch(`${API_BASE}/trigger?loop=A`, { method: 'POST' })
+    const resp = await fetch(`${API_BASE}/trigger?loop=A`, { 
+      method: 'POST',
+      headers: API_HEADERS
+    })
     if (!resp.ok) throw new Error(await resp.text())
     const data = await resp.json()
     showToast(data.message, 'success')

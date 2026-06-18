@@ -55,7 +55,12 @@ def fetch_feed(source_name: str, feed_url: str, lookback_minutes: int) -> list[R
     """抓取单个 RSS 源，过滤出 lookback_minutes 内更新的条目。"""
     items = []
     try:
-        feed = feedparser.parse(feed_url)
+        import requests
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        resp = requests.get(feed_url, timeout=15, headers=headers)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
+        
         now = datetime.now(timezone.utc)
         
         for entry in feed.entries:
